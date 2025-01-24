@@ -3,3 +3,9 @@
     <description>MultirotorSimulator nodelet</description>
   </class>
 </library>
+<library path="lib/libMrsMultirotorSimulator_FcuBinder">
+  
+  <class name="mrs_multirotor_simulator/FcuBinder" type="mrs_hitl_binders::FcuBinder" base_class_type="nodelet::Nodelet">
+    <description>fcu_binder nodelet</description>
+  </class>
+</library>
