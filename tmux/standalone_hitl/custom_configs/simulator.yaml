@@ -3,7 +3,7 @@ frames:
     publish_tf: true
 
 uav1:
-  type: "a300"
+  type: "f450"
   spawn:
     x: 10.0
     y: 15.0

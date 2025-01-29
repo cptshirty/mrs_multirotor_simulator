@@ -67,6 +67,7 @@ private:
   serial::Serial ser;
   ros::NodeHandle   nh_;
   std::atomic<bool> is_initialized_;
+  std::atomic<bool> is_synced_ = false;
   std::string uav_name;
   umsg_MessageToTransfer recvdMsg;
   uint32_t msg_len = 0;
@@ -78,6 +79,11 @@ private:
   int port_fd;
   uint32_t last_sync_time;
 
+  std::mutex mutex_sync_time;
+  ros::Time sync_time_ROS;
+  uint32_t sync_time_FCU;
+
+  int rate_divider;
   // | ------------------------- timers ------------------------- |
 
 
@@ -97,7 +103,6 @@ private:
   mrs_lib::PublisherHandler<mrs_msgs::HwApiPositionCmd>            ph_position_cmd_;
   mrs_lib::PublisherHandler<mrs_msgs::TrackerCommand>              ph_tracker_cmd_;
   
-  void publishActuatorCmd(const mrs_msgs::HwApiActuatorCmd &msg);
   
   // | ----------------------- subscribers ----------------------- |
 
@@ -135,11 +140,11 @@ private:
 void FcuBinder::onInit() {
 
   is_initialized_ = false;
-
+  rate_divider = 0;
   try {
         // Configure the serial port
         ser.setPort("/dev/ttyUSB0");
-        ser.setBaudrate(1152000);
+        ser.setBaudrate(2000000);
         serial::Timeout to = serial::Timeout::simpleTimeout(1000);
         ser.setTimeout(to);
         ser.open();
@@ -194,7 +199,7 @@ void FcuBinder::onInit() {
   }
 
   // | ----------------------- publishers ----------------------- |
-  ph_actuator_cmd_ = mrs_lib::PublisherHandler<mrs_msgs::HwApiActuatorCmd>(nh_,uav_name + "/actuators_cmd",1,false);
+  ph_actuator_cmd_ = mrs_lib::PublisherHandler<mrs_msgs::HwApiActuatorCmd>(nh_,"actuators_cmd",1,false);
   //ph_control_group_cmd_ = mrs_lib::PublisherHandler<mrs_msgs::HwApiControlGroupCmd>(nh_,uav_name + "/control_group_cmd",1,false);
 
   // | ----------------------- subscribers ----------------------- |
@@ -204,7 +209,7 @@ void FcuBinder::onInit() {
   shopts.no_message_timeout = mrs_lib::no_timeout;
   shopts.threadsafe         = true;
   shopts.autostart          = true;
-  shopts.queue_size         = 10;
+  shopts.queue_size         = 1;
   shopts.transport_hints    = ros::TransportHints().tcpNoDelay();
 
 
@@ -214,7 +219,7 @@ void FcuBinder::onInit() {
   sh_clock_ = mrs_lib::SubscribeHandler<rosgraph_msgs::Clock>(shopts, "clock_in", &FcuBinder::callbackTime, this);
 
 
-  timer_main_ = nh_.createWallTimer(ros::WallDuration(0.002), &FcuBinder::timerMain, this);
+  timer_main_ = nh_.createWallTimer(ros::WallDuration(0.0001), &FcuBinder::timerMain, this);
   // | ----------------------- finish init ---------------------- |
   umsg_CRCInit();
   is_initialized_ = true;
@@ -227,10 +232,10 @@ void FcuBinder::onInit() {
 // | ------------------------- timers ------------------------- |
 
 
-
 // | ------------------------- callbacks ------------------------- |
   void FcuBinder::callbackTime(const  rosgraph_msgs::Clock::ConstPtr msg){
-    sim_time_ = msg->clock;
+    auto sim_time= msg->clock;
+    mrs_lib::set_mutexed(mutex_sim_time_,sim_time,sim_time_);
   }
 
 
@@ -241,29 +246,18 @@ void FcuBinder::onInit() {
 
 
   void FcuBinder::callbackIMU(const  sensor_msgs::Imu::ConstPtr msg){
+    if(! is_synced_){
+      return;
+    }
     // fill the packet header
     umsg_MessageToTransfer out;
-    ros::Time t = msg->header.stamp;
-    uint32_t timestamp = static_cast<uint32_t>(t.toNSec()/1e6);
-    
+    auto [sync_ROS,sync_FCU] = mrs_lib::get_mutexed(mutex_sync_time,sync_time_ROS,sync_time_FCU);
+    auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
+    ros::Duration diff_to_now = sim_time - sync_ROS;
+    uint32_t timestamp = static_cast<uint32_t>(diff_to_now.toNSec()/1e6 + sync_FCU);
     out.s.sync0 = 'M';
     out.s.sync1 = 'R';
     
-    out.s.msg_class = UMSG_SENSORS;
-    out.s.msg_type = SENSORS_NOTIFYSENSORDATA;
-    out.s.sensors.notifySensorData.imu = 1;
-    out.s.sensors.notifySensorData.altimeter = 0;
-    out.s.sensors.notifySensorData.baro = 0;
-    out.s.sensors.notifySensorData.GPS = 0;
-    out.s.sensors.notifySensorData.magnetometer = 0;
-
-    out.s.sensors.notifySensorData.timestamp = timestamp;
-
-    uint32_t len = UMSG_HEADER_SIZE;
-    len+=sizeof(umsg_sensors_notifySensorData_t) + 1;
-    out.s.len = len;
-    out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
-    ser.write(out.raw,out.s.len);
     
     out.s.msg_class = UMSG_SENSORS;
     out.s.msg_type = SENSORS_IMU;
@@ -273,162 +267,243 @@ void FcuBinder::onInit() {
     out.s.sensors.imu.gyro[0] = static_cast<float>(msg->angular_velocity.x);
     out.s.sensors.imu.gyro[1] = static_cast<float>(msg->angular_velocity.y);
     out.s.sensors.imu.gyro[2] = static_cast<float>(msg->angular_velocity.z);
-
     out.s.sensors.imu.timestamp = timestamp;
 
-    len = UMSG_HEADER_SIZE;
+    uint32_t len = UMSG_HEADER_SIZE;
     len+=sizeof(umsg_sensors_imu_t) + 1;
     out.s.len = len;
     out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
     ser.write(out.raw,out.s.len);
     
-    
-    //ROS_INFO("[FcuBinder]: IMU CALLBACK called");
+    if(rate_divider >= 10)
+    {
+      geometry_msgs::Quaternion orient = msg->orientation;
+      Eigen::Matrix3d Rd = mrs_lib::AttitudeConverter(orient);
+      Eigen::Matrix3f R = Rd.cast<float>();
+      
+      out.s.msg_class = UMSG_SENSORS;
+      out.s.msg_type = SENSORS_MAG;
+      out.s.sensors.mag.mag[0] = R(0,0);
+      out.s.sensors.mag.mag[1] = R(1,0);
+      out.s.sensors.mag.mag[2] = R(2,0);
+      out.s.sensors.mag.timestamp = timestamp;
+
+      len = UMSG_HEADER_SIZE;
+      len+=sizeof(umsg_sensors_mag_t) + 1;
+      out.s.len = len;
+      out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
+      ser.write(out.raw,out.s.len);
+      ROS_INFO("[FcuBinder]: ORIENTATION PUBLISHED");
+    }
+    out.s.msg_class = UMSG_SENSORS;
+    out.s.msg_type = SENSORS_NOTIFYSENSORDATA;
+    out.s.sensors.notifySensorData.imu = 1;
+    out.s.sensors.notifySensorData.altimeter = 0;
+    out.s.sensors.notifySensorData.baro = 0;
+    out.s.sensors.notifySensorData.GPS = 0;
+    if(rate_divider>=10){
+      out.s.sensors.notifySensorData.magnetometer = 1;
+    }
+    else{
+      out.s.sensors.notifySensorData.magnetometer = 0;
+    }
+
+    out.s.sensors.notifySensorData.timestamp = timestamp;
+
+    len = UMSG_HEADER_SIZE;
+    len+=sizeof(umsg_sensors_notifySensorData_t) + 1;
+    out.s.len = len;
+    out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
+    ser.write(out.raw,out.s.len);
+    ser.flushOutput();
+    //ROS_INFO("[FcuBinder]: IMU Duration %d",diff_to_now.toNSec());
+    //ROS_INFO("[FcuBinder]: IMU CALLBACK called with timestamp %d",timestamp);
     // toto send the message over the serial
+
+    if(rate_divider>=10){
+      rate_divider = 0;
+    }
+    else{
+      rate_divider++;
+    }
+
   }
+
+
+
   void FcuBinder::callbackRangeFinder(const  sensor_msgs::Range::ConstPtr msg){
+    if(! is_synced_){
+      return;
+    }
     // fill the packet header
     umsg_MessageToTransfer out;
+    auto [sync_ROS,sync_FCU] = mrs_lib::get_mutexed(mutex_sync_time,sync_time_ROS,sync_time_FCU);
+    auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
+    ros::Duration diff_to_now = sim_time - sync_ROS;
+    uint32_t timestamp = static_cast<uint32_t>(diff_to_now.toNSec()/1e6 + sync_FCU);
+    
+    
     out.s.sync0 = 'M';
     out.s.sync1 = 'R';
     out.s.msg_class = UMSG_SENSORS;
     out.s.msg_type = SENSORS_ALTIMETER;
     
     out.s.sensors.altimeter.altitude = msg->range;
-    ros::Time t = msg->header.stamp;
-    uint32_t timestamp = static_cast<uint32_t>(t.toNSec()/1e6);
     out.s.sensors.altimeter.timestamp = timestamp;
-
     uint32_t len = UMSG_HEADER_SIZE;
     len+=sizeof(umsg_sensors_altimeter_t) + 1;
     out.s.len = len;
     out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
     ser.write(out.raw,out.s.len);
-    //ROS_INFO("[FcuBinder]: Range CALLBACK called");
-  }
 
+    out.s.msg_class = UMSG_SENSORS;
+    out.s.msg_type = SENSORS_NOTIFYSENSORDATA;
+    out.s.sensors.notifySensorData.imu = 0;
+    out.s.sensors.notifySensorData.altimeter = 1;
+    out.s.sensors.notifySensorData.baro = 0;
+    out.s.sensors.notifySensorData.GPS = 0;
+    out.s.sensors.notifySensorData.magnetometer = 0;
 
-  void           FcuBinder::timerMain(const ros::WallTimerEvent& event){
+    out.s.sensors.notifySensorData.timestamp = timestamp;
 
-  if (!is_initialized_) {
-    return;
-  }
-
-  ROS_INFO_ONCE("[FcuBinder]: main timer spinning");
-    state = WAITING_FOR_SYNC0;
-    bool receptionComplete = false;
-    uint32_t amount_to_flush = 0; // how much of the buffer needs to be destroyed because of invalid data
+    len = UMSG_HEADER_SIZE;
+    len+=sizeof(umsg_sensors_notifySensorData_t) + 1;
+    out.s.len = len;
+    out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
+    //ser.write(out.raw,out.s.len);
+    //ser.flushOutput();
     
-    while(!receptionComplete){
+    //ROS_INFO("[FcuBinder]: Range Duration %d",diff_to_now.toNSec());
+    //ROS_INFO("[FcuBinder]: Range CALLBACK called with timestamp %d",timestamp);
+  }
 
-        size_t val = ser.available();
-        // NOTE: potential issue with buffer overflow here
-        if( val > 0){
-          uint32_t to_read = std::min(sizeof(umsg_MessageToTransfer) - msg_len, val);
-          ROS_INFO("[FcuBinder]: reading bytes: %d", to_read);
-          ser.read(recvdMsg.raw + msg_len,to_read);
-          msg_len+= val;      
-        }
-        switch (state)
-        {
-        case WAITING_FOR_SYNC0:
-            {
-                if(msg_len >= 1){
-                    if(recvdMsg.s.sync0 != 'M'){
-                        amount_to_flush = 1;
-                        goto msg_err;
-                    }
-                    state = WAITING_FOR_SYNC1;
-                }
-                break;
-            }
-        case WAITING_FOR_SYNC1:
-            {
-                if(msg_len >= 2){
-                    if(recvdMsg.s.sync1 != 'R'){
-                        amount_to_flush = 2;
-                        goto msg_err;
-                    }
-                    state = WAITING_FOR_HEADER;
-                }
-                break;
-            }
-        case WAITING_FOR_HEADER:
-            {
-                if(msg_len >= UMSG_HEADER_SIZE)
-                {
-                    if(recvdMsg.s.len > sizeof(umsg_MessageToTransfer)){
-                        amount_to_flush = UMSG_HEADER_SIZE;
-                        goto msg_err;
-                    }
-                    state = WAITING_FOR_PAYLOAD;                    
-                }
-            }
-        //fall through
-        case WAITING_FOR_PAYLOAD:
-            {
-                if(msg_len >= recvdMsg.s.len){
-                    if(umsg_calcCRC(recvdMsg.raw,recvdMsg.s.len-1) != recvdMsg.raw[recvdMsg.s.len-1]){
-                        amount_to_flush = msg_len;
-                        goto msg_err;
-                    }
-                    receptionComplete = true;
-                }
-            }
-            break;
+  void FcuBinder::timerMain(const ros::WallTimerEvent &event)
+  {
 
-        default:
-            goto msg_err;
-            amount_to_flush = 0;
-            break;
-        }
-    }
-
-    if(receptionComplete){
-      ROS_INFO("[FcuBinder]: received message of class %d and type %d", recvdMsg.s.msg_class, recvdMsg.s.msg_type);
-      if(recvdMsg.s.msg_class == UMSG_CONTROL && recvdMsg.s.msg_type == CONTROL_DSHOTMESSAGE){
-
-        ROS_INFO("[FcuBinder]: Actuator command received");
-        mrs_msgs::HwApiActuatorCmd cmd;
-        cmd.stamp = sim_time_; // TODO: add correct timestamp
-        for (size_t i = 0; i < 4; i++)
-        {
-          cmd.motors.push_back(static_cast<float>(recvdMsg.s.control.DshotMessage.channels[i])/2048.);
-        }
-
-      }
-
-      amount_to_flush = recvdMsg.s.len;
-      for (size_t i = 0; i < msg_len - amount_to_flush; i++)
-      {
-        uint32_t indice = std::max(sizeof(umsg_MessageToTransfer), i + amount_to_flush);
-        recvdMsg.raw[i] = recvdMsg.raw[indice];
-      }
-      msg_len += -amount_to_flush;
+    if (!is_initialized_)
+    {
       return;
     }
+    bool receptionComplete = false;
+    ROS_INFO_ONCE("[FcuBinder]: main timer spinning");
+    size_t val = ser.available();
+    while (val > 0)
+    {
+      val = ser.available();
+      switch (state)
+      {
+      case WAITING_FOR_SYNC0:
+      {
+
+        if (val >= 1)
+        {
+          ser.read(recvdMsg.raw + msg_len, 1);
+          if (recvdMsg.s.sync0 != 'M')
+          {
+            goto msg_err;
+          }
+          state = WAITING_FOR_SYNC1;
+          msg_len = 1;
+        }
+        break;
+      }
+      case WAITING_FOR_SYNC1:
+      {
+        if (val >= 1)
+        {
+          ser.read(recvdMsg.raw + msg_len, 1);
+          if (recvdMsg.s.sync1 != 'R')
+          {
+            goto msg_err;
+          }
+          state = WAITING_FOR_HEADER;
+          msg_len = 2;
+        }
+        break;
+      }
+      case WAITING_FOR_HEADER:
+      {
+        if (val >= UMSG_HEADER_SIZE - msg_len)
+        {
+          ser.read(recvdMsg.raw + msg_len, UMSG_HEADER_SIZE - msg_len);
+          if (recvdMsg.s.len > sizeof(umsg_MessageToTransfer))
+          {
+            goto msg_err;
+          }
+          msg_len += UMSG_HEADER_SIZE - msg_len;
+          state = WAITING_FOR_PAYLOAD;
+        }
+      }
+      // fall through
+      case WAITING_FOR_PAYLOAD:
+      {
+        if (val >= recvdMsg.s.len - msg_len)
+        {
+          ser.read(recvdMsg.raw + msg_len,recvdMsg.s.len - msg_len);
+          if (umsg_calcCRC(recvdMsg.raw, recvdMsg.s.len - 1) != recvdMsg.raw[recvdMsg.s.len - 1])
+          {
+            goto msg_err;
+          }
+          msg_len +=recvdMsg.s.len - msg_len;
+          receptionComplete = true;
+        }
+      }
+      break;
+
+      default:
+        goto msg_err;
+        break;
+      }
+
+      if (receptionComplete)
+      {
+        auto sim_time   = mrs_lib::get_mutexed(mutex_sim_time_, sim_time_);
+        ROS_INFO("[FcuBinder]: received message of class %d and type %d", recvdMsg.s.msg_class, recvdMsg.s.msg_type);
+        if (recvdMsg.s.msg_class == UMSG_CONTROL && recvdMsg.s.msg_type == CONTROL_DSHOTMESSAGE)
+        {
+          mrs_msgs::HwApiActuatorCmd cmd;
+          umsg_control_DshotMessage_t DshotMessage = recvdMsg.s.control.DshotMessage;
+          cmd.stamp = sim_time; 
+
+          for (size_t i = 0; i < 4; i++)
+          {
+            cmd.motors.push_back(static_cast<float>(DshotMessage.channels[i])/2048.);
+          }
+          ph_actuator_cmd_.publish(cmd);
+
+        }
+        else if (recvdMsg.s.msg_class == UMSG_STATE && recvdMsg.s.msg_type == STATE_UAV_STATE)
+        {
 
 
+          umsg_state_UAV_state_t state = recvdMsg.s.state.UAV_state;
+          //auto [_, ROS,__, FCU]  = mrs_lib::set_mutexed(mutex_sync_time,sim_time, sync_time_ROS,state.timestamp,sync_time_FCU);
+          auto [ROS,FCU]  = mrs_lib::set_mutexed(mutex_sync_time,std::make_tuple(sim_time, state.timestamp),std::forward_as_tuple(sync_time_ROS,sync_time_FCU));
+          if(! is_synced_){
+              is_synced_ = true;
+          }
+        }
+
+
+        // flush
+        msg_len = 0;
+        state = WAITING_FOR_SYNC0;
+        return;
+      }
+
+      continue;
 
     msg_err:
-    
-    // NOTE: another buffer overflow issue here
-    ROS_ERROR("message corrupter, flushing: %d",amount_to_flush);
-    for (size_t i = 0; i < msg_len - amount_to_flush; i++)
-    {
-      uint32_t indice = std::max(sizeof(umsg_MessageToTransfer), i + amount_to_flush);
-      recvdMsg.raw[i] = recvdMsg.raw[indice];
+
+      // NOTE: another buffer overflow issue here
+      ROS_ERROR("message corrupted");
+      // flush
+      msg_len = 0;
+      state = WAITING_FOR_SYNC0;
     }
-    msg_len += -amount_to_flush;
 
-    return;  
+    return;
   }
-
-
-
-
-
-
 
 }  // namespace mrs_multirotor_simulator
 

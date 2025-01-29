@@ -51,6 +51,7 @@
     <remap from="~imu" to="/multirotor_simulator/uav1/imu"/>
     <remap from="~rangefinder" to="/multirotor_simulator/uav1/rangefinder"/>
     <remap from="~odom" to="/multirotor_simulator/uav1/odom"/>
+    <remap from="~actuators_cmd" to="/multirotor_simulator/uav1/actuators_cmd"/>
     <!-- <remap from="~imu_out" to="~imu" /> -->
     <remap from="~clock_in" to="/clock" />
     <remap from="~uav_poses_out" to="~uav_poses" />
