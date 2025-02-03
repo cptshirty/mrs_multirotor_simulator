@@ -10,3 +10,4 @@ uav1:
     z: 0.0
     heading: 3.14
 
+serial_port: "/dev/ttyUSB0"

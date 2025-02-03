@@ -1,5 +1,5 @@
-simulation_rate: 800.0 # Hz
-clock_rate: 800.0 # Hz
+simulation_rate: 1000.0 # Hz
+clock_rate: 1000.0 # Hz
 realtime_factor: 1.0 # [-]
 
 # when true, the simulation time will get initialized from wall time
@@ -7,9 +7,10 @@ sim_time_from_wall_time: true
 
 g: 9.81 # [ms^-2]
 
+
 iterate_without_input: true
 
-input_timeout: 1.0 # [s]
+input_timeout: 0.2 # [s]
 
 frames:
   world:

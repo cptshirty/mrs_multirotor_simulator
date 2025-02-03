@@ -113,6 +113,7 @@ add_subdirectory(umsg_lib)
 
 add_library(MrsMultirotorSimulator_FcuBinder
   src/fcu_hilt_binder.cpp
+  src/serial_port.cpp
   )
 
 add_dependencies(MrsMultirotorSimulator_FcuBinder
