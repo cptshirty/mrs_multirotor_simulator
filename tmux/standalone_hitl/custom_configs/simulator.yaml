@@ -11,3 +11,8 @@ uav1:
     heading: 3.14
 
 serial_port: "/dev/ttyUSB0"
+baud_rate: 2000000
+
+imu_rate: 50.0 #[Hz]
+mag_rate: 50.0 #[Hz]
+altitude_rate: 75.0 #[Hz]

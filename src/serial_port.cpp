@@ -99,6 +99,10 @@ bool SerialPort::connect(const std::string port, const int baudrate, const bool 
       baudrate_set = B921600;
       break;
     }
+    case 1152000: {
+      baudrate_set = B1152000;
+      break;
+    }
     case 2000000: {
       baudrate_set = B2000000;
       break;
@@ -168,7 +172,7 @@ void SerialPort::setBlocking(int fd, int should_block) {
     return;
   }
 
-  tty.c_cc[VMIN]  = should_block ? 1 : 0;
+  tty.c_cc[VMIN]  = should_block ? should_block: 0;
   tty.c_cc[VTIME] = 0;  // 0.0 seconds read timeout
 
   if (tcsetattr(fd, TCSANOW, &tty) != 0)

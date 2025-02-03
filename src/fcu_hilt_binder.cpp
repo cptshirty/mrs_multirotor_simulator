@@ -76,6 +76,13 @@ private:
   ReceiverState state = WAITING_FOR_SYNC0;
   // | ------------------------- params ------------------------- |
 
+  ros::Time imu_published;
+  ros::Time mag_published;
+  ros::Time altitude_published;
+  ros::Duration imu_delay_;
+  ros::Duration mag_delay_;
+  ros::Duration altitude_delay_;
+
   ros::Time  sim_time_;
   std::mutex mutex_sim_time_;
 
@@ -86,7 +93,6 @@ private:
   std::mutex mutex_sync_result;
   std::tuple<ros::Time, uint32_t> sync_result;
 
-  int rate_divider;
   
   // | ------------------------- timers ------------------------- |
 
@@ -119,6 +125,12 @@ private:
   void callbackIMU(const  sensor_msgs::Imu::ConstPtr msg);
   void callbackRangeFinder(const  sensor_msgs::Range::ConstPtr msg);
   void callbackTime(const  rosgraph_msgs::Clock::ConstPtr msg);
+
+
+
+  void publishImu(const  sensor_msgs::Imu::ConstPtr msg, ros::Time &sim_time);
+  void publishMag(const  sensor_msgs::Imu::ConstPtr msg, ros::Time &sim_time);
+  void publishAltitude(const nav_msgs::Odometry::ConstPtr msg, ros::Time &sim_time);
   // | ------------------------- system ------------------------- |
 
 
@@ -152,7 +164,6 @@ private:
 void FcuBinder::onInit() {
 
   is_initialized_ = false;
-  rate_divider = 0;
   nh_ = nodelet::Nodelet::getMTPrivateNodeHandle();
 
   if (!(nh_.hasParam("/use_sim_time"))) {
@@ -183,13 +194,30 @@ void FcuBinder::onInit() {
 
   std::string serial_port;
   param_loader.loadParam("serial_port", serial_port);
+  int baud_rate;
+  param_loader.loadParam("baud_rate", baud_rate);
 
-  if(!ser.connect(serial_port,2000000,false)){
+  if(!ser.connect(serial_port,baud_rate,false)){
     ROS_ERROR("could not open serial port");
     return;
   }
-  ser.setBlocking(ser.serial_port_fd_,1);
+  ser.setBlocking(ser.serial_port_fd_,sizeof(umsg_MessageToTransfer));
   
+  double rate;
+  param_loader.loadParam("imu_rate", rate);
+  imu_delay_ = ros::Duration(1/rate);
+  
+  param_loader.loadParam("mag_rate", rate);
+  mag_delay_ = ros::Duration(1/rate);
+  
+  param_loader.loadParam("altitude_rate", rate);
+  altitude_delay_ = ros::Duration(1/rate);
+
+  imu_published = ros::Time::now();
+  mag_published = ros::Time::now();
+  altitude_published = ros::Time::now();
+
+
   std::string uav_name;
 
   param_loader.loadParam("uav_name", uav_name);
@@ -234,47 +262,10 @@ void FcuBinder::onInit() {
 // | ------------------------- timers ------------------------- |
 
 
-// | ------------------------- callbacks ------------------------- |
-  void FcuBinder::callbackTime(const  rosgraph_msgs::Clock::ConstPtr msg){
-    auto sim_time= msg->clock;
-    mrs_lib::set_mutexed(mutex_sim_time_,sim_time,sim_time_);
-  }
-
-
-  void FcuBinder::callbackOdometry(const nav_msgs::Odometry::ConstPtr msg){
-
-    //ROS_INFO("[FcuBinder]: ODOM CALLBACK called");
-  }
-
-
-  void FcuBinder::callbackIMU(const  sensor_msgs::Imu::ConstPtr msg){
-    const int rate_limit = 20;
-    static ros::Time last_published;
-    if(! is_synced_){
-      auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
-      last_published = sim_time;
-      return;
-    }
-    
-    // fill the packet header
+void FcuBinder::publishImu(const  sensor_msgs::Imu::ConstPtr msg,ros::Time &sim_time){
     umsg_MessageToTransfer out;
-    auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
-    
-    if(last_published == sim_time){
-      return;
-    }
-    else{
-      last_published = sim_time;
-    }
-    
-    std::scoped_lock(serial_mutex_);
-    
-    
-    uint32_t timestamp = RosToFcu(sim_time);
     out.s.sync0 = 'M';
     out.s.sync1 = 'R';
-    
-    
     out.s.msg_class = UMSG_SENSORS;
     out.s.msg_type = SENSORS_IMU;
     out.s.sensors.imu.accel[0] = static_cast<float>(msg->linear_acceleration.x / GRAV_CONST);
@@ -284,124 +275,172 @@ void FcuBinder::onInit() {
     out.s.sensors.imu.gyro[0] = static_cast<float>(msg->angular_velocity.x);
     out.s.sensors.imu.gyro[1] = static_cast<float>(msg->angular_velocity.y);
     out.s.sensors.imu.gyro[2] = static_cast<float>(msg->angular_velocity.z);
-    out.s.sensors.imu.timestamp = timestamp;
+    out.s.sensors.imu.timestamp = RosToFcu(sim_time);
 
     uint32_t len = UMSG_HEADER_SIZE;
     len+=sizeof(umsg_sensors_imu_t) + 1;
     out.s.len = len;
     out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
     ser.sendCharArray(out.raw,out.s.len);
-    if(rate_divider >= rate_limit)
-    {
+
+}
+void  FcuBinder::publishMag(const  sensor_msgs::Imu::ConstPtr msg,ros::Time &sim_time){
+
       geometry_msgs::Quaternion orient = msg->orientation;
       Eigen::Matrix3d Rd = mrs_lib::AttitudeConverter(orient);
       Eigen::Matrix3f R = Rd.cast<float>();
+      umsg_MessageToTransfer out;
+      out.s.sync0 = 'M';
+      out.s.sync1 = 'R';
       
       out.s.msg_class = UMSG_SENSORS;
       out.s.msg_type = SENSORS_MAG;
       //ROS_INFO("[FCU BINDER] %f %f %f",R(0,0),R(1,0),R(2,0));
-      out.s.sensors.mag.mag[0] = R(0,0);
-      out.s.sensors.mag.mag[1] = R(1,0);
-      out.s.sensors.mag.mag[2] = R(2,0);
-      out.s.sensors.mag.timestamp = timestamp;
+      out.s.sensors.mag.mag[0] = R(0,1);
+      out.s.sensors.mag.mag[1] = R(1,1);
+      out.s.sensors.mag.mag[2] = R(2,1);
+      out.s.sensors.mag.timestamp = RosToFcu(sim_time);
 
-      len = UMSG_HEADER_SIZE;
+      uint32_t len = UMSG_HEADER_SIZE;
       len+=sizeof(umsg_sensors_mag_t) + 1;
       out.s.len = len;
       out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
       ser.sendCharArray(out.raw,out.s.len);
-    }
 
+}
+
+
+void  FcuBinder::publishAltitude(const nav_msgs::Odometry::ConstPtr msg,ros::Time &sim_time){
+    umsg_MessageToTransfer out;
+    out.s.sync0 = 'M';
+    out.s.sync1 = 'R';
     out.s.msg_class = UMSG_SENSORS;
-    out.s.msg_type = SENSORS_NOTIFYSENSORDATA;
-    out.s.sensors.notifySensorData.imu = 1;
-    out.s.sensors.notifySensorData.altimeter = 0;
-    out.s.sensors.notifySensorData.baro = 0;
-    out.s.sensors.notifySensorData.GPS = 0;
-    if(rate_divider>=rate_limit){
-      out.s.sensors.notifySensorData.magnetometer = 1;
-    }
-    else{
-      out.s.sensors.notifySensorData.magnetometer = 0;
-    }
-
-    out.s.sensors.notifySensorData.timestamp = timestamp;
-
-    len = UMSG_HEADER_SIZE;
-    len+=sizeof(umsg_sensors_notifySensorData_t) + 1;
+    out.s.msg_type = SENSORS_ALTIMETER;
+    
+    out.s.sensors.altimeter.altitude = msg->pose.pose.position.z;
+    out.s.sensors.altimeter.timestamp = RosToFcu(sim_time);
+    uint32_t len = UMSG_HEADER_SIZE;
+    len+=sizeof(umsg_sensors_altimeter_t) + 1;
     out.s.len = len;
     out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
+    
     ser.sendCharArray(out.raw,out.s.len);
-    //ROS_INFO("[FcuBinder]: IMU Duration %d",diff_to_now.toNSec());
-    ROS_INFO("[FcuBinder]: IMU CALLBACK called with timestamp %ld",timestamp);
-    // toto send the message over the serial
 
-    if(rate_divider>=rate_limit){
-      rate_divider = 0;
+}
+
+
+
+
+
+
+// | ------------------------- callbacks ------------------------- |
+  void FcuBinder::callbackTime(const  rosgraph_msgs::Clock::ConstPtr msg){
+    auto sim_time= msg->clock;
+    mrs_lib::set_mutexed(mutex_sim_time_,sim_time,sim_time_);
+  }
+
+
+  void FcuBinder::callbackOdometry(const nav_msgs::Odometry::ConstPtr msg){
+    if(! is_synced_){
+      return;
     }
-    else{
-      rate_divider++;
+    // fill the packet header
+    umsg_MessageToTransfer notifyMsg;
+    notifyMsg.s.sync0 = 'M';
+    notifyMsg.s.sync1 = 'R';
+    notifyMsg.s.msg_class = UMSG_SENSORS;
+    notifyMsg.s.msg_type = SENSORS_NOTIFYSENSORDATA;
+    notifyMsg.s.sensors.notifySensorData.imu = 0;
+    notifyMsg.s.sensors.notifySensorData.altimeter = 0;
+    notifyMsg.s.sensors.notifySensorData.baro = 0;
+    notifyMsg.s.sensors.notifySensorData.GPS = 0;
+    notifyMsg.s.sensors.notifySensorData.magnetometer = 0;
+
+    bool publishNotify = false;
+
+    auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
+
+
+
+    std::scoped_lock lock(serial_mutex_);
+    if(sim_time - altitude_published >= altitude_delay_){
+      publishAltitude(msg,sim_time);
+      altitude_published = sim_time;
+      notifyMsg.s.sensors.notifySensorData.altimeter = 1;
+      publishNotify = true;
+      ROS_INFO_ONCE("[FcuBinder]: Altitude CALLBACK called");
     }
+  
+    if(publishNotify){
+      notifyMsg.s.sensors.notifySensorData.timestamp = RosToFcu(sim_time);
+      uint32_t len = UMSG_HEADER_SIZE;
+      len+=sizeof(umsg_sensors_notifySensorData_t) + 1;
+      notifyMsg.s.len = len;
+      notifyMsg.raw[len-1] = umsg_calcCRC(notifyMsg.raw,len-1);
+      ser.sendCharArray(notifyMsg.raw,notifyMsg.s.len);
+    }
+
+
+  }
+
+
+  void FcuBinder::callbackIMU(const  sensor_msgs::Imu::ConstPtr msg){
+    
+    if(! is_synced_){
+      return;
+    }
+    
+    // fill the packet header
+    auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
+    
+    umsg_MessageToTransfer notifyMsg;
+    notifyMsg.s.sync0 = 'M';
+    notifyMsg.s.sync1 = 'R';
+    notifyMsg.s.msg_class = UMSG_SENSORS;
+    notifyMsg.s.msg_type = SENSORS_NOTIFYSENSORDATA;
+    notifyMsg.s.sensors.notifySensorData.imu = 0;
+    notifyMsg.s.sensors.notifySensorData.altimeter = 0;
+    notifyMsg.s.sensors.notifySensorData.baro = 0;
+    notifyMsg.s.sensors.notifySensorData.GPS = 0;
+    notifyMsg.s.sensors.notifySensorData.magnetometer = 0;
+    
+    bool publishNotify = false;
+    std::scoped_lock lock(serial_mutex_);
+    
+    if(sim_time - imu_published >= imu_delay_){
+      publishImu(msg,sim_time);
+      imu_published = sim_time;
+      notifyMsg.s.sensors.notifySensorData.imu = 1;
+      publishNotify = true;
+      ROS_INFO_ONCE("[FcuBinder]: IMU CALLBACK called");
+    }
+    
+    if(sim_time - mag_published >= mag_delay_){
+      publishMag(msg,sim_time);
+      mag_published = sim_time;
+      notifyMsg.s.sensors.notifySensorData.magnetometer= 1;
+      publishNotify = true;
+      ROS_INFO_ONCE("[FcuBinder]: MAG CALLBACK called");
+    }
+
+
+    if(publishNotify){
+
+      notifyMsg.s.sensors.notifySensorData.timestamp = RosToFcu(sim_time);
+      uint32_t len = UMSG_HEADER_SIZE;
+      len+=sizeof(umsg_sensors_notifySensorData_t) + 1;
+      notifyMsg.s.len = len;
+      notifyMsg.raw[len-1] = umsg_calcCRC(notifyMsg.raw,len-1);
+      ser.sendCharArray(notifyMsg.raw,notifyMsg.s.len);
+    }
+    //ROS_INFO("[FcuBinder]: IMU Duration %d",diff_to_now.toNSec());
+    // toto send the message over the serial
   }
 
 
 
   void FcuBinder::callbackRangeFinder(const  sensor_msgs::Range::ConstPtr msg){
    
-   /*
-    static ros::Time last_published;
-    if(! is_synced_){
-      auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
-      last_published = sim_time;
-      return;
-    }
-    // fill the packet header
-    umsg_MessageToTransfer out;
-    auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
-
-    if(last_published == sim_time){
-      return;
-    }
-    else{
-      last_published = sim_time;
-    }
-
-    uint32_t timestamp = RosToFcu(sim_time);
-    
-    
-    out.s.sync0 = 'M';
-    out.s.sync1 = 'R';
-    out.s.msg_class = UMSG_SENSORS;
-    out.s.msg_type = SENSORS_ALTIMETER;
-    
-    out.s.sensors.altimeter.altitude = msg->range;
-    out.s.sensors.altimeter.timestamp = timestamp;
-    uint32_t len = UMSG_HEADER_SIZE;
-    len+=sizeof(umsg_sensors_altimeter_t) + 1;
-    out.s.len = len;
-    out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
-    //ser.write(out.raw,out.s.len);
-
-    out.s.msg_class = UMSG_SENSORS;
-    out.s.msg_type = SENSORS_NOTIFYSENSORDATA;
-    out.s.sensors.notifySensorData.imu = 0;
-    out.s.sensors.notifySensorData.altimeter = 1;
-    out.s.sensors.notifySensorData.baro = 0;
-    out.s.sensors.notifySensorData.GPS = 0;
-    out.s.sensors.notifySensorData.magnetometer = 0;
-
-    out.s.sensors.notifySensorData.timestamp = timestamp;
-
-    len = UMSG_HEADER_SIZE;
-    len+=sizeof(umsg_sensors_notifySensorData_t) + 1;
-    out.s.len = len;
-    out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
-    //ser.write(out.raw,out.s.len);
-    //ser.flushOutput();
-    
-    //ROS_INFO("[FcuBinder]: Range Duration %d",diff_to_now.toNSec());
-    //ROS_INFO("[FcuBinder]: Range CALLBACK called with timestamp %d",timestamp);
-  */
   }
 
 
@@ -588,7 +627,7 @@ void FcuBinder::onInit() {
     auto curr_time   = mrs_lib::get_mutexed(mutex_sim_time_, sim_time_);
     
     {
-      std::scoped_lock(serial_mutex_);
+      std::scoped_lock lock(serial_mutex_);
       ser.sendCharArray(msg.raw,msg.s.len);
     }
 
