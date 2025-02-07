@@ -13,6 +13,12 @@ uav1:
 serial_port: "/dev/ttyUSB0"
 baud_rate: 2000000
 
-imu_rate: 50.0 #[Hz]
+
+start_latitude: 15.2
+start_longditude: 14.3
+
+
+imu_rate: 1000.0 #[Hz]
 mag_rate: 50.0 #[Hz]
 altitude_rate: 75.0 #[Hz]
+gps_rate: 10.0 #[Hz]

@@ -40,6 +40,8 @@
 #include <umsg.h>
 #include <umsg_classes.h>
 
+#include "gps_conversions.h"
+
 
 //}
 
@@ -79,9 +81,11 @@ private:
   ros::Time imu_published;
   ros::Time mag_published;
   ros::Time altitude_published;
+  ros::Time gps_published;
   ros::Duration imu_delay_;
   ros::Duration mag_delay_;
   ros::Duration altitude_delay_;
+  ros::Duration gps_delay_;
 
   ros::Time  sim_time_;
   std::mutex mutex_sim_time_;
@@ -89,6 +93,10 @@ private:
   std::mutex mutex_sync_time;
   ros::Time sync_time_ROS_send;
   uint32_t sequence_number = 0;
+
+    double startX,startY;
+    std::string UTM_zone;
+
 
   std::mutex mutex_sync_result;
   std::tuple<ros::Time, uint32_t> sync_result;
@@ -131,6 +139,7 @@ private:
   void publishImu(const  sensor_msgs::Imu::ConstPtr msg, ros::Time &sim_time);
   void publishMag(const  sensor_msgs::Imu::ConstPtr msg, ros::Time &sim_time);
   void publishAltitude(const nav_msgs::Odometry::ConstPtr msg, ros::Time &sim_time);
+  void publishGps(const nav_msgs::Odometry::ConstPtr msg, ros::Time &sim_time);
   // | ------------------------- system ------------------------- |
 
 
@@ -213,9 +222,24 @@ void FcuBinder::onInit() {
   param_loader.loadParam("altitude_rate", rate);
   altitude_delay_ = ros::Duration(1/rate);
 
+
+  param_loader.loadParam("gps_rate", rate);
+  gps_delay_ = ros::Duration(1/rate);
+
+
+  double startLat,startLon;
+
+  param_loader.loadParam("start_latitude", startLat);
+  param_loader.loadParam("start_longditude", startLon);
+
+  gps_conversions::LLtoUTM(startLat,startLon,startY,startX,UTM_zone);
+
+
   imu_published = ros::Time::now();
   mag_published = ros::Time::now();
   altitude_published = ros::Time::now();
+  gps_published = ros::Time::now();
+
 
 
   std::string uav_name;
@@ -288,7 +312,7 @@ void  FcuBinder::publishMag(const  sensor_msgs::Imu::ConstPtr msg,ros::Time &sim
 
       geometry_msgs::Quaternion orient = msg->orientation;
       Eigen::Matrix3d Rd = mrs_lib::AttitudeConverter(orient);
-      Eigen::Matrix3f R = Rd.cast<float>();
+      Eigen::Matrix3f R = Rd.cast<float>().transpose();
       umsg_MessageToTransfer out;
       out.s.sync0 = 'M';
       out.s.sync1 = 'R';
@@ -328,6 +352,48 @@ void  FcuBinder::publishAltitude(const nav_msgs::Odometry::ConstPtr msg,ros::Tim
 
 }
 
+void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &sim_time){
+    umsg_MessageToTransfer out;
+    out.s.sync0 = 'M';
+    out.s.sync1 = 'R';
+    out.s.msg_class = UMSG_SENSORS;
+    out.s.msg_type =  SENSORS_GPS;
+
+  
+    out.s.sensors.gps.timestamp = RosToFcu(sim_time);
+    out.s.sensors.gps.fixType = FIX_3D;
+    out.s.sensors.gps.hELPS = 0;
+    out.s.sensors.gps.hMSL = 0;
+    out.s.sensors.gps.reserved = 0;
+    out.s.sensors.gps.numSV = 20;
+
+    double UTMNorth,UTMEast;
+    UTMEast =  startX + msg->pose.pose.position.x;
+    UTMNorth = startY + msg->pose.pose.position.y;
+
+    double lat, lon;  
+    gps_conversions::UTMtoLL(UTMNorth,UTMEast,UTM_zone,lat,lon);
+
+
+    out.s.sensors.gps.lat = lat; 
+    out.s.sensors.gps.lon = lon; 
+
+    out.s.sensors.gps.CRCValid = 1;
+    out.s.sensors.gps.DataValid = 1;
+    out.s.sensors.gps.gnssFixOk = 1;
+    
+    out.s.sensors.gps.vel[0] = 0;
+    out.s.sensors.gps.vel[1] = 0;
+    out.s.sensors.gps.vel[2] = 0;
+
+    uint32_t len = UMSG_HEADER_SIZE;
+    len+=sizeof(umsg_sensors_gps_t) + 1;
+    out.s.len = len;
+    out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
+    
+    ser.sendCharArray(out.raw,out.s.len);
+
+}
 
 
 
@@ -371,6 +437,18 @@ void  FcuBinder::publishAltitude(const nav_msgs::Odometry::ConstPtr msg,ros::Tim
       ROS_INFO_ONCE("[FcuBinder]: Altitude CALLBACK called");
     }
   
+
+    if(sim_time - gps_published >= gps_delay_){
+      publishGps(msg,sim_time);
+      gps_published = sim_time;
+      notifyMsg.s.sensors.notifySensorData.GPS = 1;
+      publishNotify = true;
+      ROS_INFO_ONCE("[FcuBinder]: GPS CALLBACK called");
+    }
+
+
+
+
     if(publishNotify){
       notifyMsg.s.sensors.notifySensorData.timestamp = RosToFcu(sim_time);
       uint32_t len = UMSG_HEADER_SIZE;
