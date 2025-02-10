@@ -30,6 +30,9 @@
 #include <mrs_msgs/HwApiPositionCmd.h>
 #include <mrs_msgs/TrackerCommand.h>
 
+#include <random>
+
+
 namespace mrs_multirotor_simulator
 {
 
@@ -87,6 +90,8 @@ private:
 
   mrs_lib::PublisherHandler<sensor_msgs::Imu>   ph_imu_;
   mrs_lib::PublisherHandler<nav_msgs::Odometry> ph_odom_;
+  mrs_lib::PublisherHandler<sensor_msgs::Imu>   ph_imu_noise_;
+  mrs_lib::PublisherHandler<nav_msgs::Odometry> ph_odom_noise_;
   mrs_lib::PublisherHandler<sensor_msgs::Range> ph_rangefinder_;
 
   void publishOdometry(const MultirotorModel::State& state);
@@ -136,6 +141,16 @@ private:
   // | ------------------------ routines ------------------------ |
 
   void calculateInertia(MultirotorModel::ModelParams& params);
+
+  // | ------------------------- noise parameters ------------------------- |
+    std::mt19937 gen;
+    std::normal_distribution<double> accel_gen;
+    std::normal_distribution<double> gyro_gen;
+    std::normal_distribution<double> mag_gen;
+    std::normal_distribution<double> altitude_gen;
+    std::normal_distribution<double> position_gen;
+
+
 };
 
 }  // namespace mrs_multirotor_simulator

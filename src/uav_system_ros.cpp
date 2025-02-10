@@ -1,5 +1,6 @@
 #include <uav_system_ros.h>
 
+
 namespace mrs_multirotor_simulator
 {
 
@@ -161,11 +162,45 @@ UavSystemRos::UavSystemRos(ros::NodeHandle &nh, const std::string uav_name) {
     ros::shutdown();
   }
 
+  // | ----------------------- noise generation ---------------------- |
+    double bias = 0;
+    double stddev = 0;
+
+    //accel
+    param_loader.loadParam("accel_bias", bias);
+    param_loader.loadParam("accel_stddev", stddev);
+    accel_gen = std::normal_distribution<double>(bias,stddev);
+
+
+    //gyro
+    param_loader.loadParam("gyro_bias", bias);
+    param_loader.loadParam("gyro_stddev", stddev);
+    gyro_gen = std::normal_distribution<double>(bias,stddev);
+    
+    
+    //altitude
+    param_loader.loadParam("altitude_bias", bias);
+    param_loader.loadParam("altitude_stddev", stddev);
+    altitude_gen = std::normal_distribution<double>(bias,stddev);
+
+
+    //mag
+    param_loader.loadParam("mag_bias", bias);
+    param_loader.loadParam("mag_stddev", stddev);
+    mag_gen = std::normal_distribution<double>(bias,stddev);
+
+    std::random_device rd;
+    gen = std::mt19937(rd());
+
   // | ----------------------- publishers ----------------------- |
 
   ph_imu_         = mrs_lib::PublisherHandler<sensor_msgs::Imu>(nh, uav_name + "/imu", 1, false);
   ph_odom_        = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh, uav_name + "/odom", 1, false);
   ph_rangefinder_ = mrs_lib::PublisherHandler<sensor_msgs::Range>(nh, uav_name + "/rangefinder", 1, false);
+
+  ph_imu_noise_         = mrs_lib::PublisherHandler<sensor_msgs::Imu>(nh, uav_name + "/imu_noise", 1, false);
+  ph_odom_noise_        = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh, uav_name + "/odom_noise", 1, false);
+
 
   // | ----------------------- subscribers ---------------------- |
 
@@ -364,6 +399,15 @@ void UavSystemRos::publishOdometry(const MultirotorModel::State &state) {
   odom.twist.twist.angular.z = state.omega(2);
 
   ph_odom_.publish(odom);
+  // add the noise
+
+  odom.pose.pose.position.x+= position_gen(gen);
+  odom.pose.pose.position.y+= position_gen(gen);
+  odom.pose.pose.position.z+= altitude_gen(gen);
+
+    //TODO add the noise to the magnetometer
+
+  ph_odom_noise_.publish(odom);
 }
 
 //}
@@ -390,6 +434,18 @@ void UavSystemRos::publishIMU(const MultirotorModel::State &state) {
   imu.orientation = mrs_lib::AttitudeConverter(state.R);
 
   ph_imu_.publish(imu);
+
+  // add the noise 
+  imu.angular_velocity.x+= gyro_gen(gen);
+  imu.angular_velocity.y+= gyro_gen(gen);
+  imu.angular_velocity.z+= gyro_gen(gen);
+
+  imu.linear_acceleration.x+= accel_gen(gen);
+  imu.linear_acceleration.y+= accel_gen(gen);
+  imu.linear_acceleration.z+= accel_gen(gen);
+
+  ph_imu_noise_.publish(imu);
+
 }
 
 //}

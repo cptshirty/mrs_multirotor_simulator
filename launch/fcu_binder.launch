@@ -48,9 +48,11 @@
     <param name="uav_name" value="uav1"/>
     
     <remap from="~diagnostics_out" to="~diagnostics" />
-    <remap from="~imu" to="/multirotor_simulator/uav1/imu"/>
     <remap from="~rangefinder" to="/multirotor_simulator/uav1/rangefinder"/>
-    <remap from="~odom" to="/multirotor_simulator/uav1/odom"/>
+    <!-- <remap from="~imu" to="/multirotor_simulator/uav1/imu"/>
+    <remap from="~odom" to="/multirotor_simulator/uav1/odom"/> -->
+    <remap from="~imu" to="/multirotor_simulator/uav1/imu_noise"/>
+    <remap from="~odom" to="/multirotor_simulator/uav1/odom_noise"/>
     <remap from="~actuators_cmd" to="/multirotor_simulator/uav1/actuators_cmd"/>
     <!-- <remap from="~imu_out" to="~imu" /> -->
     <remap from="~clock_in" to="/clock" />

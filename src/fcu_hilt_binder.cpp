@@ -43,6 +43,10 @@
 #include "gps_conversions.h"
 
 
+#include <random>
+
+
+
 //}
 
 #define GRAV_CONST 9.81
@@ -101,7 +105,6 @@ private:
   std::mutex mutex_sync_result;
   std::tuple<ros::Time, uint32_t> sync_result;
 
-  
   // | ------------------------- timers ------------------------- |
 
 
@@ -273,6 +276,9 @@ void FcuBinder::onInit() {
 
 
   timer_sync_ = nh_.createWallTimer(ros::WallDuration(1.00),&FcuBinder::timerSync,this);
+
+
+
   // | ----------------------- finish init ---------------------- |
   umsg_CRCInit();
   is_initialized_ = true;
