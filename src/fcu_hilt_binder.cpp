@@ -238,6 +238,7 @@ void FcuBinder::onInit() {
   gps_conversions::LLtoUTM(startLat,startLon,startY,startX,UTM_zone);
 
 
+  ROS_INFO("SELECTED UTM ZONE IS : %s",UTM_zone.c_str());
   imu_published = ros::Time::now();
   mag_published = ros::Time::now();
   altitude_published = ros::Time::now();
@@ -380,6 +381,7 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
     double lat, lon;  
     gps_conversions::UTMtoLL(UTMNorth,UTMEast,UTM_zone,lat,lon);
 
+    ROS_INFO("pos is: %f %f gps is: %f %f",UTMEast,UTMNorth,lat,lon);
 
     out.s.sensors.gps.lat = lat; 
     out.s.sensors.gps.lon = lon; 

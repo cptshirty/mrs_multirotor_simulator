@@ -189,6 +189,14 @@ UavSystemRos::UavSystemRos(ros::NodeHandle &nh, const std::string uav_name) {
     param_loader.loadParam("mag_stddev", stddev);
     mag_gen = std::normal_distribution<double>(bias,stddev);
 
+    //mag
+    param_loader.loadParam("pos_bias", bias);
+    param_loader.loadParam("pos_stddev", stddev);
+    position_gen = std::normal_distribution<double>(bias,stddev);
+
+
+
+
     std::random_device rd;
     gen = std::mt19937(rd());
 

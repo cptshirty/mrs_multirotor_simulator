@@ -27,10 +27,13 @@ accel_stddev: 0.0 # [m/s^2]
 accel_bias: 0.0 # [m/s^2]
 
 gyro_stddev: 0.0 # [rad/s]
-gyro_bias: 0.1 # [rad/s]
+gyro_bias: 0.00 # [rad/s]
 
 altitude_stddev: 0.0 # [m]
 altitude_bias: 0.0 # [m]
 
 mag_stddev: 0.0 # [degrees ?  ]
 mag_bias: 0.0 # [degrees ?]
+
+pos_stddev: 0.0 # [m ]
+pos_bias: 0.0 # [m]
