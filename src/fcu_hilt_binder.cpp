@@ -293,7 +293,8 @@ void FcuBinder::onInit() {
 // | ------------------------- timers ------------------------- |
 
 
-void FcuBinder::publishImu(const  sensor_msgs::Imu::ConstPtr msg,ros::Time &sim_time){
+// PublishImu//{
+void FcuBinder::publishImu(const  sensor_msgs::Imu::ConstPtr msg,ros::Time &sim_time){/*//{*/
     umsg_MessageToTransfer out;
     out.s.sync0 = 'M';
     out.s.sync1 = 'R';
@@ -314,7 +315,11 @@ void FcuBinder::publishImu(const  sensor_msgs::Imu::ConstPtr msg,ros::Time &sim_
     out.raw[len-1] = umsg_calcCRC(out.raw,len-1);
     ser.sendCharArray(out.raw,out.s.len);
 
-}
+}/*//}*//*//}*/
+
+
+
+
 void  FcuBinder::publishMag(const  sensor_msgs::Imu::ConstPtr msg,ros::Time &sim_time){
 
       geometry_msgs::Quaternion orient = msg->orientation;
@@ -381,7 +386,6 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
     double lat, lon;  
     gps_conversions::UTMtoLL(UTMNorth,UTMEast,UTM_zone,lat,lon);
 
-    ROS_INFO("pos is: %f %f gps is: %f %f",UTMEast,UTMNorth,lat,lon);
 
     out.s.sensors.gps.lat = lat; 
     out.s.sensors.gps.lon = lon; 

@@ -6,6 +6,8 @@
 
 #include <mrs_lib/transform_broadcaster.h>
 
+
+
 #include <mrs_lib/param_loader.h>
 #include <mrs_lib/publisher_handler.h>
 #include <mrs_lib/subscribe_handler.h>
@@ -31,7 +33,7 @@
 #include <mrs_msgs/TrackerCommand.h>
 
 #include <random>
-
+#include <mrs_lib/iir_filter.h>
 
 namespace mrs_multirotor_simulator
 {
@@ -149,6 +151,10 @@ private:
     std::normal_distribution<double> mag_gen;
     std::normal_distribution<double> altitude_gen;
     std::normal_distribution<double> position_gen;
+    std::array<mrs_lib::IirFilter,3> accel_filters_;
+    std::array<mrs_lib::IirFilter,3> gyro_filters_;
+
+
 
 
 };

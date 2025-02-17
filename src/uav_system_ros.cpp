@@ -194,6 +194,27 @@ UavSystemRos::UavSystemRos(ros::NodeHandle &nh, const std::string uav_name) {
     param_loader.loadParam("pos_stddev", stddev);
     position_gen = std::normal_distribution<double>(bias,stddev);
 
+    // load the filters into std vector
+    std::vector<double> b_coeffs;
+    std::vector<double> a_coeffs;
+    a_coeffs.push_back(1.);
+    int n = 0;
+    const std::string base_accel = "accel";
+    
+    for(mrs_lib::IirFilter & filt : accel_filters_){
+        std::string param = base_accel + std::to_string(n);
+        param_loader.loadParam(param,b_coeffs);
+        filt = mrs_lib::IirFilter(a_coeffs,b_coeffs);
+    }
+
+    n = 0;
+    const std::string base_gyro = "gyro";
+    
+    for(mrs_lib::IirFilter & filt : gyro_filters_){
+        std::string param = base_gyro + std::to_string(n);
+        param_loader.loadParam(param,b_coeffs);
+        filt = mrs_lib::IirFilter(a_coeffs,b_coeffs);
+    }
 
 
 
