@@ -266,7 +266,7 @@ void FcuBinder::onInit() {
   shopts.no_message_timeout = mrs_lib::no_timeout;
   shopts.threadsafe         = true;
   shopts.autostart          = true;
-  shopts.queue_size         = 1;
+  shopts.queue_size         = 5;
   shopts.transport_hints    = ros::TransportHints().tcpNoDelay();
 
 
@@ -434,13 +434,13 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
     notifyMsg.s.sensors.notifySensorData.GPS = 0;
     notifyMsg.s.sensors.notifySensorData.magnetometer = 0;
 
-    bool publishNotify = false;
 
     auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
 
 
 
     std::scoped_lock lock(serial_mutex_);
+    /*
     if(sim_time - altitude_published >= altitude_delay_){
       publishAltitude(msg,sim_time);
       altitude_published = sim_time;
@@ -448,30 +448,25 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
       publishNotify = true;
       ROS_INFO_ONCE("[FcuBinder]: Altitude CALLBACK called");
     }
-  
+    */
 
-    if(sim_time - gps_published >= gps_delay_){
       publishGps(msg,sim_time);
       gps_published = sim_time;
       notifyMsg.s.sensors.notifySensorData.GPS = 1;
-      publishNotify = true;
       ROS_INFO_ONCE("[FcuBinder]: GPS CALLBACK called");
-    }
 
 
 
 
-    if(publishNotify){
       notifyMsg.s.sensors.notifySensorData.timestamp = RosToFcu(sim_time);
       uint32_t len = UMSG_HEADER_SIZE;
       len+=sizeof(umsg_sensors_notifySensorData_t) + 1;
       notifyMsg.s.len = len;
       notifyMsg.raw[len-1] = umsg_calcCRC(notifyMsg.raw,len-1);
       ser.sendCharArray(notifyMsg.raw,notifyMsg.s.len);
-    }
+}
 
 
-  }
 
 
   void FcuBinder::callbackIMU(const  sensor_msgs::Imu::ConstPtr msg){
@@ -479,7 +474,7 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
     if(! is_synced_){
       return;
     }
-    
+    static double index = 0;
     // fill the packet header
     auto sim_time = mrs_lib::get_mutexed(mutex_sim_time_,sim_time_);
     
@@ -494,17 +489,19 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
     notifyMsg.s.sensors.notifySensorData.GPS = 0;
     notifyMsg.s.sensors.notifySensorData.magnetometer = 0;
     
-    bool publishNotify = false;
     std::scoped_lock lock(serial_mutex_);
     
-    if(sim_time - imu_published >= imu_delay_){
       publishImu(msg,sim_time);
       imu_published = sim_time;
       notifyMsg.s.sensors.notifySensorData.imu = 1;
-      publishNotify = true;
       ROS_INFO_ONCE("[FcuBinder]: IMU CALLBACK called");
-    }
     
+      if(msg->linear_acceleration.x - index > 1){
+        ROS_ERROR("THE check differs more than 1  new: %f old:  %f diff: %f ", msg->linear_acceleration.x,index,msg->linear_acceleration.x - index);
+      }
+      index = msg->linear_acceleration.x;
+ 
+      /*
     if(sim_time - mag_published >= mag_delay_){
       publishMag(msg,sim_time);
       mag_published = sim_time;
@@ -512,9 +509,9 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
       publishNotify = true;
       ROS_INFO_ONCE("[FcuBinder]: MAG CALLBACK called");
     }
+      */
 
 
-    if(publishNotify){
 
       notifyMsg.s.sensors.notifySensorData.timestamp = RosToFcu(sim_time);
       uint32_t len = UMSG_HEADER_SIZE;
@@ -522,7 +519,6 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
       notifyMsg.s.len = len;
       notifyMsg.raw[len-1] = umsg_calcCRC(notifyMsg.raw,len-1);
       ser.sendCharArray(notifyMsg.raw,notifyMsg.s.len);
-    }
     //ROS_INFO("[FcuBinder]: IMU Duration %d",diff_to_now.toNSec());
     // toto send the message over the serial
   }
@@ -653,9 +649,10 @@ void  FcuBinder::publishGps(const nav_msgs::Odometry::ConstPtr msg,ros::Time &si
 
 
           umsg_state_heartbeat_t beat = recvdMsg.s.state.heartbeat;
-
+            
           calculateDelay(beat);
           if(! is_synced_){
+              calculateDelay(beat);
               is_synced_ = true;
           }
         }

@@ -58,6 +58,7 @@ include_directories(
 
 add_library(MrsMultirotorSimulator_SimulatorSystemRos
   src/uav_system_ros.cpp
+  src/iir_filter.cpp
   )
 
 add_dependencies(MrsMultirotorSimulator_SimulatorSystemRos

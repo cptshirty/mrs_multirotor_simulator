@@ -1,5 +1,5 @@
 #include <uav_system_ros.h>
-
+#include <cmath>
 
 namespace mrs_multirotor_simulator
 {
@@ -169,142 +169,201 @@ UavSystemRos::UavSystemRos(ros::NodeHandle &nh, const std::string uav_name) {
     //accel
     param_loader.loadParam("accel_bias", bias);
     param_loader.loadParam("accel_stddev", stddev);
-    accel_gen = std::normal_distribution<double>(bias,stddev);
+    accel_gen_ = std::normal_distribution<double>(bias,stddev);
 
 
     //gyro
     param_loader.loadParam("gyro_bias", bias);
     param_loader.loadParam("gyro_stddev", stddev);
-    gyro_gen = std::normal_distribution<double>(bias,stddev);
+    gyro_gen_ = std::normal_distribution<double>(bias,stddev);
     
     
     //altitude
     param_loader.loadParam("altitude_bias", bias);
     param_loader.loadParam("altitude_stddev", stddev);
-    altitude_gen = std::normal_distribution<double>(bias,stddev);
+    altitude_gen_ = std::normal_distribution<double>(bias,stddev);
 
 
     //mag
     param_loader.loadParam("mag_bias", bias);
     param_loader.loadParam("mag_stddev", stddev);
-    mag_gen = std::normal_distribution<double>(bias,stddev);
+    mag_gen_ = std::normal_distribution<double>(bias,stddev);
 
-    //mag
+    //position
     param_loader.loadParam("pos_bias", bias);
     param_loader.loadParam("pos_stddev", stddev);
-    position_gen = std::normal_distribution<double>(bias,stddev);
+    position_gen_ = std::normal_distribution<double>(bias,stddev);
 
+    //range
+    param_loader.loadParam("range_bias", bias);
+    param_loader.loadParam("range_stddev", stddev);
+    
+    range_gen_ = std::normal_distribution<double>(bias,stddev);
+    
+    
+    
     // load the filters into std vector
     std::vector<double> b_coeffs;
     std::vector<double> a_coeffs;
-    a_coeffs.push_back(1.);
-    int n = 0;
-    const std::string base_accel = "accel";
+    a_coeffs.push_back(1);
     
-    for(mrs_lib::IirFilter & filt : accel_filters_){
-        std::string param = base_accel + std::to_string(n);
-        param_loader.loadParam(param,b_coeffs);
-        filt = mrs_lib::IirFilter(a_coeffs,b_coeffs);
-    }
-
-    n = 0;
-    const std::string base_gyro = "gyro";
+    //accel
+    const std::string base_accel = "B_accel";
     
-    for(mrs_lib::IirFilter & filt : gyro_filters_){
-        std::string param = base_gyro + std::to_string(n);
+    for(int i = 0; i<3; i++){
+        std::string param = base_accel + std::to_string(i);
         param_loader.loadParam(param,b_coeffs);
-        filt = mrs_lib::IirFilter(a_coeffs,b_coeffs);
+        accel_noiseShapers_.push_back(mrs_lib::IirFilter(a_coeffs,b_coeffs));
     }
 
 
+    //gyro
+    const std::string base_gyro = "B_gyro";
+    
+    for(int i = 0; i<3; i++){
+        std::string param = base_gyro + std::to_string(i);
+        param_loader.loadParam(param,b_coeffs);
+        gyro_noiseShapers_.push_back(mrs_lib::IirFilter(a_coeffs,b_coeffs));
+    }
 
-    std::random_device rd;
-    gen = std::mt19937(rd());
+    // altitude
+        param_loader.loadParam("B_altitude",b_coeffs);
+        altitude_noiseShaper_ = mrs_lib::IirFilter(a_coeffs,b_coeffs);
 
-  // | ----------------------- publishers ----------------------- |
+    //mag
+    const std::string base_mag = "B_mag";
+    
+    for(int i = 0; i<3; i++){
+        std::string param = base_mag + std::to_string(i);
+        param_loader.loadParam(param,b_coeffs);
+        mag_noiseShapers_.push_back(mrs_lib::IirFilter(a_coeffs,b_coeffs));
+    }
 
-  ph_imu_         = mrs_lib::PublisherHandler<sensor_msgs::Imu>(nh, uav_name + "/imu", 1, false);
-  ph_odom_        = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh, uav_name + "/odom", 1, false);
-  ph_rangefinder_ = mrs_lib::PublisherHandler<sensor_msgs::Range>(nh, uav_name + "/rangefinder", 1, false);
 
-  ph_imu_noise_         = mrs_lib::PublisherHandler<sensor_msgs::Imu>(nh, uav_name + "/imu_noise", 1, false);
-  ph_odom_noise_        = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh, uav_name + "/odom_noise", 1, false);
+    //position
+    const std::string base_pos = "B_position";
+    
+    for(int i = 0; i<3; i++){
+        std::string param = base_pos + std::to_string(i);
+        param_loader.loadParam(param,b_coeffs);
+        position_noiseShapers_.push_back(mrs_lib::IirFilter(a_coeffs,b_coeffs));
+    }
+
+    //range
+        param_loader.loadParam("B_range",b_coeffs);
+        range_noiseShaper_ = mrs_lib::IirFilter(a_coeffs,b_coeffs);
+
+  // | ----------------------- load the rates for publishing ----------------------- |
+
+        double frequency = 0;
+
+        param_loader.loadParam("imu_rate",frequency);
+        imu_delay_.fromNSec(static_cast<int64_t>(1/frequency));
 
 
-  // | ----------------------- subscribers ---------------------- |
+        param_loader.loadParam("mag_rate",frequency);
+        mag_delay_.fromNSec(static_cast<int64_t>(1/frequency));
 
-  mrs_lib::SubscribeHandlerOptions shopts;
-  shopts.nh                 = nh;
-  shopts.node_name          = _uav_name_;
-  shopts.no_message_timeout = mrs_lib::no_timeout;
-  shopts.threadsafe         = true;
-  shopts.autostart          = true;
-  shopts.queue_size         = 10;
-  shopts.transport_hints    = ros::TransportHints().tcpNoDelay();
 
-  sh_actuator_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiActuatorCmd>(shopts, uav_name + "/actuators_cmd", &UavSystemRos::callbackActuatorCmd, this);
+        param_loader.loadParam("altitude_rate",frequency);
+        altitude_delay_.fromNSec(static_cast<int64_t>(1/frequency));
 
-  sh_control_group_cmd_ =
-      mrs_lib::SubscribeHandler<mrs_msgs::HwApiControlGroupCmd>(shopts, uav_name + "/control_group_cmd", &UavSystemRos::callbackControlGroupCmd, this);
+        param_loader.loadParam("position_rate",frequency);
+        position_delay_.fromNSec(static_cast<int64_t>(1/frequency));
+ 
+        param_loader.loadParam("range_rate",frequency);
+        range_delay_.fromNSec(static_cast<int64_t>(1/frequency));
+ 
+ 
+ 
+        // | ----------------------- publishers ----------------------- |
 
-  sh_attitude_rate_cmd_ =
-      mrs_lib::SubscribeHandler<mrs_msgs::HwApiAttitudeRateCmd>(shopts, uav_name + "/attitude_rate_cmd", &UavSystemRos::callbackAttitudeRateCmd, this);
+        ph_imu_ = mrs_lib::PublisherHandler<sensor_msgs::Imu>(nh, uav_name + "/imu", 1, false);
+        ph_odom_ = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh, uav_name + "/odom", 1, false);
+        ph_rangefinder_ = mrs_lib::PublisherHandler<sensor_msgs::Range>(nh, uav_name + "/rangefinder", 1, false);
+        ph_altitude_ = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh, uav_name + "/altitude", 1, false); // only the z value is valid
+        ph_mag_ = mrs_lib::PublisherHandler<sensor_msgs::MagneticField>(nh, uav_name + "/magnetometer", 1, false);
 
-  sh_attitude_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiAttitudeCmd>(shopts, uav_name + "/attitude_cmd", &UavSystemRos::callbackAttitudeCmd, this);
+        ph_imu_noise_ = mrs_lib::PublisherHandler<sensor_msgs::Imu>(nh, uav_name + "/imu_noise", 1, false);
+        ph_odom_noise_ = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh, uav_name + "/odom_noise", 1, false);
+        ph_rangefinder_noise_ = mrs_lib::PublisherHandler<sensor_msgs::Range>(nh, uav_name + "/rangefinder_noise", 1, false);
+        ph_altitude_noise_ = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh, uav_name + "/altitude_noise", 1, false); // only the z value is valid
+        ph_mag_noise_ = mrs_lib::PublisherHandler<sensor_msgs::MagneticField>(nh, uav_name + "/magnetometer_noise", 1, false);
 
-  sh_acceleration_hdg_cmd_ =
-      mrs_lib::SubscribeHandler<mrs_msgs::HwApiAccelerationHdgCmd>(shopts, uav_name + "/acceleration_hdg_cmd", &UavSystemRos::callbackAccelerationHdgCmd, this);
+        // | ----------------------- subscribers ---------------------- |
 
-  sh_acceleration_hdg_rate_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiAccelerationHdgRateCmd>(shopts, uav_name + "/acceleration_hdg_rate_cmd",
-                                                                                                   &UavSystemRos::callbackAccelerationHdgRateCmd, this);
+        mrs_lib::SubscribeHandlerOptions shopts;
+        shopts.nh = nh;
+        shopts.node_name = _uav_name_;
+        shopts.no_message_timeout = mrs_lib::no_timeout;
+        shopts.threadsafe = true;
+        shopts.autostart = true;
+        shopts.queue_size = 10;
+        shopts.transport_hints = ros::TransportHints().tcpNoDelay();
 
-  sh_velocity_hdg_cmd_ =
-      mrs_lib::SubscribeHandler<mrs_msgs::HwApiVelocityHdgCmd>(shopts, uav_name + "/velocity_hdg_cmd", &UavSystemRos::callbackVelocityHdgCmd, this);
+        sh_actuator_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiActuatorCmd>(shopts, uav_name + "/actuators_cmd", &UavSystemRos::callbackActuatorCmd, this);
 
-  sh_velocity_hdg_rate_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiVelocityHdgRateCmd>(shopts, uav_name + "/velocity_hdg_rate_cmd",
-                                                                                           &UavSystemRos::callbackVelocityHdgRateCmd, this);
+        sh_control_group_cmd_ =
+            mrs_lib::SubscribeHandler<mrs_msgs::HwApiControlGroupCmd>(shopts, uav_name + "/control_group_cmd", &UavSystemRos::callbackControlGroupCmd, this);
 
-  sh_position_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiPositionCmd>(shopts, uav_name + "/position_cmd", &UavSystemRos::callbackPositionCmd, this);
+        sh_attitude_rate_cmd_ =
+            mrs_lib::SubscribeHandler<mrs_msgs::HwApiAttitudeRateCmd>(shopts, uav_name + "/attitude_rate_cmd", &UavSystemRos::callbackAttitudeRateCmd, this);
 
-  sh_tracker_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::TrackerCommand>(shopts, uav_name + "/tracker_cmd", &UavSystemRos::callbackTrackerCmd, this);
+        sh_attitude_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiAttitudeCmd>(shopts, uav_name + "/attitude_cmd", &UavSystemRos::callbackAttitudeCmd, this);
 
-  // | --------------------- tf broadcaster --------------------- |
+        sh_acceleration_hdg_cmd_ =
+            mrs_lib::SubscribeHandler<mrs_msgs::HwApiAccelerationHdgCmd>(shopts, uav_name + "/acceleration_hdg_cmd", &UavSystemRos::callbackAccelerationHdgCmd, this);
 
-  tf_broadcaster_ = std::make_shared<mrs_lib::TransformBroadcaster>();
+        sh_acceleration_hdg_rate_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiAccelerationHdgRateCmd>(shopts, uav_name + "/acceleration_hdg_rate_cmd",
+                                                                                                         &UavSystemRos::callbackAccelerationHdgRateCmd, this);
 
-  // | --------------------- service servers -------------------- |
+        sh_velocity_hdg_cmd_ =
+            mrs_lib::SubscribeHandler<mrs_msgs::HwApiVelocityHdgCmd>(shopts, uav_name + "/velocity_hdg_cmd", &UavSystemRos::callbackVelocityHdgCmd, this);
 
-  service_server_set_mass_ = nh.advertiseService(uav_name + "/set_mass", &UavSystemRos::callbackSetMass, this);
+        sh_velocity_hdg_rate_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiVelocityHdgRateCmd>(shopts, uav_name + "/velocity_hdg_rate_cmd",
+                                                                                                 &UavSystemRos::callbackVelocityHdgRateCmd, this);
 
-  service_server_set_ground_z_ = nh.advertiseService(uav_name + "/set_ground_z", &UavSystemRos::callbackSetGroundZ, this);
+        sh_position_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::HwApiPositionCmd>(shopts, uav_name + "/position_cmd", &UavSystemRos::callbackPositionCmd, this);
 
-  // | ------------------ first model iteration ----------------- |
+        sh_tracker_cmd_ = mrs_lib::SubscribeHandler<mrs_msgs::TrackerCommand>(shopts, uav_name + "/tracker_cmd", &UavSystemRos::callbackTrackerCmd, this);
 
-  // * we need to iterate the model first to initialize its state
-  // * this needs to happen in order to publish the correct state
-  //   when using iterate_without_input == false
+        // | --------------------- tf broadcaster --------------------- |
 
-  reference::Actuators actuators_cmd;
+        tf_broadcaster_ = std::make_shared<mrs_lib::TransformBroadcaster>();
 
-  actuators_cmd.motors = Eigen::VectorXd::Zero(model_params_.n_motors);
+        // | --------------------- service servers -------------------- |
 
-  // set the motor input for the model
-  uav_system_.setInput(actuators_cmd);
+        service_server_set_mass_ = nh.advertiseService(uav_name + "/set_mass", &UavSystemRos::callbackSetMass, this);
 
-  // iterate the model twise to initialize all the states
-  uav_system_.makeStep(0.01);
-  uav_system_.makeStep(0.01);
+        service_server_set_ground_z_ = nh.advertiseService(uav_name + "/set_ground_z", &UavSystemRos::callbackSetGroundZ, this);
 
-  is_initialized_ = true;
+        // | ------------------ first model iteration ----------------- |
 
-  ROS_INFO("[%s]: initialized", _uav_name_.c_str());
+        // * we need to iterate the model first to initialize its state
+        // * this needs to happen in order to publish the correct state
+        //   when using iterate_without_input == false
+
+        reference::Actuators actuators_cmd;
+
+        actuators_cmd.motors = Eigen::VectorXd::Zero(model_params_.n_motors);
+
+        // set the motor input for the model
+        uav_system_.setInput(actuators_cmd);
+
+        // iterate the model twise to initialize all the states
+        uav_system_.makeStep(0.01);
+        uav_system_.makeStep(0.01);
+
+        is_initialized_ = true;
+
+        ROS_INFO("[%s]: initialized", _uav_name_.c_str());
 }
 
 //}
 
 /* makeStep() //{ */
 
-void UavSystemRos::makeStep(const double dt) {
+void UavSystemRos::makeStep(const double dt,const ros::Time &sim_time) {
 
   // | ---------------- check timeout of an input --------------- |
 
@@ -339,11 +398,40 @@ void UavSystemRos::makeStep(const double dt) {
 
   // publish data
 
-  publishOdometry(state);
+  //position
+  if(sim_time - position_last_stamp_ >= position_delay_){
+    publishOdometry(state);
+    position_last_stamp_ = sim_time;
+  }
 
-  publishIMU(state);
+  //imu
+  if(sim_time - imu_last_stamp_ >= imu_delay_){
+    publishIMU(state);
+    imu_last_stamp_ = sim_time;
+  }
+  else{
+    ROS_WARN("sim is: %ld last stamp: %ld, difference: %ld",sim_time.toNSec(), imu_last_stamp_.toNSec(),(sim_time - imu_last_stamp_).toNSec());
+  }
 
-  publishRangefinder(state);
+
+  //rangefinder
+  if(sim_time - range_last_stamp_ >= range_delay_){
+    publishRangefinder(state);
+    range_last_stamp_ = sim_time;
+  }
+
+  //mag
+  if(sim_time - mag_last_stamp_ >= mag_delay_){
+    publishMag(state);
+    mag_last_stamp_ = sim_time;
+  }
+
+  //altimeter
+  if(sim_time - altitude_last_stamp_ >= altitude_delay_){
+    publishAltitude(state);
+    altitude_last_stamp_ = sim_time;
+  }
+
 }
 
 //}
@@ -405,6 +493,7 @@ void UavSystemRos::applyForce(const Eigen::Vector3d &force) {
 
 void UavSystemRos::publishOdometry(const MultirotorModel::State &state) {
 
+
   nav_msgs::Odometry odom;
 
   odom.header.stamp    = ros::Time::now();
@@ -430,11 +519,9 @@ void UavSystemRos::publishOdometry(const MultirotorModel::State &state) {
   ph_odom_.publish(odom);
   // add the noise
 
-  odom.pose.pose.position.x+= position_gen(gen);
-  odom.pose.pose.position.y+= position_gen(gen);
-  odom.pose.pose.position.z+= altitude_gen(gen);
-
-    //TODO add the noise to the magnetometer
+  odom.pose.pose.position.x+= position_noiseShapers_.at(0).iterate(position_gen_(gen));
+  odom.pose.pose.position.y+= position_noiseShapers_.at(1).iterate(position_gen_(gen));
+  odom.pose.pose.position.z+= position_noiseShapers_.at(2).iterate(position_gen_(gen));
 
   ph_odom_noise_.publish(odom);
 }
@@ -445,6 +532,7 @@ void UavSystemRos::publishOdometry(const MultirotorModel::State &state) {
 
 void UavSystemRos::publishIMU(const MultirotorModel::State &state) {
 
+    static double sample_id = 0;
   sensor_msgs::Imu imu;
 
   imu.header.stamp    = ros::Time::now();
@@ -455,7 +543,7 @@ void UavSystemRos::publishIMU(const MultirotorModel::State &state) {
   imu.angular_velocity.z = state.omega(2);
 
   auto acc = uav_system_.getImuAcceleration();
-
+  
   imu.linear_acceleration.x = acc(0);
   imu.linear_acceleration.y = acc(1);
   imu.linear_acceleration.z = acc(2);
@@ -463,16 +551,21 @@ void UavSystemRos::publishIMU(const MultirotorModel::State &state) {
   imu.orientation = mrs_lib::AttitudeConverter(state.R);
 
   ph_imu_.publish(imu);
+  // generate the noise and add it
+  
+  constexpr double PI = 3.14159265358979323846;
 
   // add the noise 
-  imu.angular_velocity.x+= gyro_gen(gen);
-  imu.angular_velocity.y+= gyro_gen(gen);
-  imu.angular_velocity.z+= gyro_gen(gen);
+    double sample = gyro_gen_(gen);
+  imu.angular_velocity.x = gyro_noiseShapers_.at(0).iterate(sample);
+  imu.angular_velocity.y+= sin(2*PI*10*imu.header.stamp.toSec());
+  imu.angular_velocity.z = sample;
 
-  imu.linear_acceleration.x+= accel_gen(gen);
-  imu.linear_acceleration.y+= accel_gen(gen);
-  imu.linear_acceleration.z+= accel_gen(gen);
 
+  imu.linear_acceleration.x= sample_id;
+  imu.linear_acceleration.y= imu.header.stamp.toSec();
+  imu.linear_acceleration.z+= accel_gen_(gen);
+  sample_id+=1;
   ph_imu_noise_.publish(imu);
 
 }
@@ -515,6 +608,9 @@ void UavSystemRos::publishRangefinder(const MultirotorModel::State &state) {
 
   ph_rangefinder_.publish(range);
 
+  //add the noise
+  range.range+= range_noiseShaper_.iterate(range_gen_(gen));
+
   if (_publish_rangefinder_tf_) {
 
     geometry_msgs::TransformStamped tf;
@@ -551,6 +647,80 @@ void UavSystemRos::publishRangefinder(const MultirotorModel::State &state) {
 }
 
 //}
+
+/* publishAltitude() //{ */
+
+void UavSystemRos::publishAltitude(const MultirotorModel::State &state) {
+
+  nav_msgs::Odometry odom;
+
+  odom.header.stamp    = ros::Time::now();
+  odom.header.frame_id = _frame_world_;
+  odom.child_frame_id  = _frame_fcu_;
+
+  odom.pose.pose.orientation = mrs_lib::AttitudeConverter(state.R);
+
+  odom.pose.pose.position.x = 0;
+  odom.pose.pose.position.y = 0;
+  odom.pose.pose.position.z = state.x(2);
+
+  ph_altitude_.publish(odom);
+  // add the noise
+
+  odom.pose.pose.position.z+= altitude_noiseShaper_.iterate(altitude_gen_(gen));
+  
+  ph_altitude_noise_.publish(odom);
+}
+
+//}
+
+/* publishMag() //{ */
+
+void UavSystemRos::publishMag(const MultirotorModel::State &state) {
+
+// TODO implement this
+
+
+    /*
+  sensor_msgs::MagneticField mag;
+
+  mag.header.stamp    = ros::Time::now();
+  mag.header.frame_id = _frame_fcu_;
+
+  mag.pose.pose.orientation = mrs_lib::AttitudeConverter(state.R);
+
+  mag.pose.pose.position.x = state.x(0);
+  mag.pose.pose.position.y = state.x(1);
+  mag.pose.pose.position.z = state.x(2);
+
+  Eigen::Vector3d vel_body = state.R.transpose() * state.v;
+
+  mag.twist.twist.linear.x = vel_body(0);
+  mag.twist.twist.linear.y = vel_body(1);
+  mag.twist.twist.linear.z = vel_body(2);
+
+  mag.twist.twist.angular.x = state.omega(0);
+  mag.twist.twist.angular.y = state.omega(1);
+  mag.twist.twist.angular.z = state.omega(2);
+
+  ph_mag_.publish(mag);
+  // add the noise
+
+  mag.pose.pose.position.x+= position_gen(gen);
+  mag.pose.pose.position.y+= position_gen(gen);
+  mag.pose.pose.position.z+= altitude_gen(gen);
+
+    //TODO add the noise to the magnetometer
+
+  ph_mag_noise_.publish(mag);
+*/
+}
+
+//}
+
+
+
+
 
 // | ------------------------ routines ------------------------ |
 

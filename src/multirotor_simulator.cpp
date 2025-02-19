@@ -204,20 +204,27 @@ void MultirotorSimulator::timerMain([[maybe_unused]] const ros::WallTimerEvent& 
   ROS_INFO_ONCE("[MultirotorSimulator]: main timer spinning");
 
   double simulation_step_size = 1.0 / _simulation_rate_;
+  
 
   // step the time
   sim_time_ = sim_time_ + ros::Duration(simulation_step_size);
+  
+
+
+
+  // | ---------------------- Iterate step ---------------------- |
 
   for (size_t i = 0; i < uavs_.size(); i++) {
-    uavs_.at(i)->makeStep(simulation_step_size);
+    uavs_.at(i)->makeStep(simulation_step_size,sim_time_);
   }
 
   publishPoses();
 
   handleCollisions();
-
+  
   // | ---------------------- publish time ---------------------- |
 
+  // publish time first so that the other data can be caught with correct sim time
   if ((sim_time_ - last_published_time_).toSec() >= _clock_min_dt_) {
 
     rosgraph_msgs::Clock ros_time;
@@ -228,6 +235,7 @@ void MultirotorSimulator::timerMain([[maybe_unused]] const ros::WallTimerEvent& 
 
     last_published_time_ = sim_time_;
   }
+
 }
 
 //}

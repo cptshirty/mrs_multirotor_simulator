@@ -18,8 +18,11 @@
 
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/Range.h>
+#include <sensor_msgs/MagneticField.h>
+
 #include <nav_msgs/Odometry.h>
 #include <mrs_msgs/Float64Srv.h>
+
 
 #include <mrs_msgs/HwApiActuatorCmd.h>
 #include <mrs_msgs/HwApiControlGroupCmd.h>
@@ -33,7 +36,7 @@
 #include <mrs_msgs/TrackerCommand.h>
 
 #include <random>
-#include <mrs_lib/iir_filter.h>
+#include "iir_filter.h"
 
 namespace mrs_multirotor_simulator
 {
@@ -43,7 +46,7 @@ class UavSystemRos {
 public:
   UavSystemRos(ros::NodeHandle& nh, const std::string name);
 
-  void makeStep(const double dt);
+  void makeStep(const double dt,const ros::Time &sim_time);
 
   void crash(void);
 
@@ -92,13 +95,23 @@ private:
 
   mrs_lib::PublisherHandler<sensor_msgs::Imu>   ph_imu_;
   mrs_lib::PublisherHandler<nav_msgs::Odometry> ph_odom_;
+  mrs_lib::PublisherHandler<sensor_msgs::Range> ph_rangefinder_;
+  mrs_lib::PublisherHandler<sensor_msgs::MagneticField> ph_mag_;
+  mrs_lib::PublisherHandler<nav_msgs::Odometry> ph_altitude_;
+  
   mrs_lib::PublisherHandler<sensor_msgs::Imu>   ph_imu_noise_;
   mrs_lib::PublisherHandler<nav_msgs::Odometry> ph_odom_noise_;
-  mrs_lib::PublisherHandler<sensor_msgs::Range> ph_rangefinder_;
+  mrs_lib::PublisherHandler<sensor_msgs::Range> ph_rangefinder_noise_;
+  mrs_lib::PublisherHandler<sensor_msgs::MagneticField> ph_mag_noise_;
+  mrs_lib::PublisherHandler<nav_msgs::Odometry> ph_altitude_noise_;
 
   void publishOdometry(const MultirotorModel::State& state);
   void publishIMU(const MultirotorModel::State& state);
   void publishRangefinder(const MultirotorModel::State& state);
+  void publishMag(const MultirotorModel::State& state);
+  void publishAltitude(const MultirotorModel::State& state);
+
+
 
   void timeoutInput(void);
 
@@ -146,14 +159,31 @@ private:
 
   // | ------------------------- noise parameters ------------------------- |
     std::mt19937 gen;
-    std::normal_distribution<double> accel_gen;
-    std::normal_distribution<double> gyro_gen;
-    std::normal_distribution<double> mag_gen;
-    std::normal_distribution<double> altitude_gen;
-    std::normal_distribution<double> position_gen;
-    std::array<mrs_lib::IirFilter,3> accel_filters_;
-    std::array<mrs_lib::IirFilter,3> gyro_filters_;
+    std::normal_distribution<double> accel_gen_;
+    std::normal_distribution<double> gyro_gen_;
+    std::normal_distribution<double> mag_gen_;
+    std::normal_distribution<double> altitude_gen_;
+    std::normal_distribution<double> position_gen_;
+    std::normal_distribution<double> range_gen_;
 
+    std::vector<mrs_lib::IirFilter> accel_noiseShapers_;
+    std::vector<mrs_lib::IirFilter> gyro_noiseShapers_;
+    std::vector<mrs_lib::IirFilter> mag_noiseShapers_;
+    mrs_lib::IirFilter altitude_noiseShaper_;
+    mrs_lib::IirFilter range_noiseShaper_;
+    std::vector<mrs_lib::IirFilter> position_noiseShapers_;
+
+    ros::Duration imu_delay_;
+    ros::Duration mag_delay_;
+    ros::Duration altitude_delay_;
+    ros::Duration position_delay_;
+    ros::Duration range_delay_;
+    
+    ros::Time imu_last_stamp_;
+    ros::Time mag_last_stamp_;
+    ros::Time altitude_last_stamp_;
+    ros::Time position_last_stamp_;
+    ros::Time range_last_stamp_;
 
 
 
