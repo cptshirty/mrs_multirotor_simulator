@@ -92,7 +92,7 @@ public:
     Eigen::Vector3d x;
     Eigen::Vector3d v;
     Eigen::Vector3d v_prev;
-    Eigen::Matrix3d R;
+    Eigen::Matrix3d R; // vector transformation from drone to world
     Eigen::Vector3d omega;
     Eigen::VectorXd motor_rpm;
   };

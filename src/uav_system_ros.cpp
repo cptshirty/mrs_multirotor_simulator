@@ -682,9 +682,9 @@ void UavSystemRos::publishMag(const MultirotorModel::State &state, const ros::Ti
   mag.header.stamp    = sim_time;
   mag.header.frame_id = _frame_fcu_;
 
-  mag.magnetic_field.x = state.R(0,1);
+  mag.magnetic_field.x = state.R(1,0);
   mag.magnetic_field.y = state.R(1,1);
-  mag.magnetic_field.z = state.R(2,1);
+  mag.magnetic_field.z = state.R(1,2);
 
   ph_mag_.publish(mag);
   // add the noise
