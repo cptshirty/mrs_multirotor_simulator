@@ -157,11 +157,6 @@ UavSystemRos::UavSystemRos(ros::NodeHandle &nh, const std::string uav_name) {
 
   uav_system_.setPositionControllerParams(position_controller_params);
 
-  if (!param_loader.loadedSuccessfully()) {
-    ROS_ERROR("[%s]: failed to load all parameters", _uav_name_.c_str());
-    ros::shutdown();
-  }
-
   // | ----------------------- noise generation ---------------------- |
     double bias = 0;
     double stddev = 0;
@@ -258,24 +253,28 @@ UavSystemRos::UavSystemRos(ros::NodeHandle &nh, const std::string uav_name) {
         double frequency = 0;
 
         param_loader.loadParam("imu_rate",frequency);
-        imu_delay_.fromNSec(static_cast<int64_t>(1/frequency));
+        imu_delay_.fromNSec(static_cast<int64_t>(1e9/frequency));
 
 
         param_loader.loadParam("mag_rate",frequency);
-        mag_delay_.fromNSec(static_cast<int64_t>(1/frequency));
+        mag_delay_.fromNSec(static_cast<int64_t>(1e9/frequency));
 
 
         param_loader.loadParam("altitude_rate",frequency);
-        altitude_delay_.fromNSec(static_cast<int64_t>(1/frequency));
+        altitude_delay_.fromNSec(static_cast<int64_t>(1e9/frequency));
 
         param_loader.loadParam("position_rate",frequency);
-        position_delay_.fromNSec(static_cast<int64_t>(1/frequency));
+        position_delay_.fromNSec(static_cast<int64_t>(1e9/frequency));
  
         param_loader.loadParam("range_rate",frequency);
-        range_delay_.fromNSec(static_cast<int64_t>(1/frequency));
- 
- 
- 
+        range_delay_.fromNSec(static_cast<int64_t>(1e9/frequency));
+
+        if (!param_loader.loadedSuccessfully())
+        {
+            ROS_ERROR("[%s]: failed to load all parameters", _uav_name_.c_str());
+            ros::shutdown();
+        }
+
         // | ----------------------- publishers ----------------------- |
 
         ph_imu_ = mrs_lib::PublisherHandler<sensor_msgs::Imu>(nh, uav_name + "/imu", 1, false);
@@ -399,37 +398,36 @@ void UavSystemRos::makeStep(const double dt,const ros::Time &sim_time) {
   // publish data
 
   //position
-  if(sim_time - position_last_stamp_ >= position_delay_){
-    publishOdometry(state);
-    position_last_stamp_ = sim_time;
-  }
+    publishOdometry(state, sim_time);
 
   //imu
-  if(sim_time - imu_last_stamp_ >= imu_delay_){
-    publishIMU(state);
-    imu_last_stamp_ = sim_time;
-  }
-  else{
-    ROS_WARN("sim is: %ld last stamp: %ld, difference: %ld",sim_time.toNSec(), imu_last_stamp_.toNSec(),(sim_time - imu_last_stamp_).toNSec());
-  }
+    publishIMU(state,sim_time);
 
 
   //rangefinder
-  if(sim_time - range_last_stamp_ >= range_delay_){
-    publishRangefinder(state);
-    range_last_stamp_ = sim_time;
-  }
+    publishRangefinder(state,sim_time);
 
   //mag
-  if(sim_time - mag_last_stamp_ >= mag_delay_){
-    publishMag(state);
-    mag_last_stamp_ = sim_time;
-  }
+    publishMag(state,sim_time);
 
   //altimeter
-  if(sim_time - altitude_last_stamp_ >= altitude_delay_){
-    publishAltitude(state);
-    altitude_last_stamp_ = sim_time;
+    publishAltitude(state,sim_time);
+  
+  if (_publish_fcu_tf_) {
+
+    geometry_msgs::TransformStamped tf;
+
+    tf.header.stamp    = ros::Time::now();
+    tf.header.frame_id = _frame_world_;
+    tf.child_frame_id  = _frame_fcu_;
+
+    tf.transform.translation.x = state.x(0);
+    tf.transform.translation.y = state.x(1);
+    tf.transform.translation.z = state.x(2);
+
+    tf.transform.rotation = mrs_lib::AttitudeConverter(state.R);
+
+    tf_broadcaster_->sendTransform(tf);
   }
 
 }
@@ -491,7 +489,7 @@ void UavSystemRos::applyForce(const Eigen::Vector3d &force) {
 
 /* publishOdometry() //{ */
 
-void UavSystemRos::publishOdometry(const MultirotorModel::State &state) {
+void UavSystemRos::publishOdometry(const MultirotorModel::State &state, const ros::Time & sim_time) {
 
 
   nav_msgs::Odometry odom;
@@ -519,23 +517,26 @@ void UavSystemRos::publishOdometry(const MultirotorModel::State &state) {
   ph_odom_.publish(odom);
   // add the noise
 
-  odom.pose.pose.position.x+= position_noiseShapers_.at(0).iterate(position_gen_(gen));
-  odom.pose.pose.position.y+= position_noiseShapers_.at(1).iterate(position_gen_(gen));
-  odom.pose.pose.position.z+= position_noiseShapers_.at(2).iterate(position_gen_(gen));
+  if(sim_time - position_last_stamp_ >= position_delay_){
+    
+    odom.pose.pose.position.x+= position_noiseShapers_.at(0).iterate(position_gen_(gen));
+    odom.pose.pose.position.y+= position_noiseShapers_.at(1).iterate(position_gen_(gen));
+    odom.pose.pose.position.z+= position_noiseShapers_.at(2).iterate(position_gen_(gen));
 
-  ph_odom_noise_.publish(odom);
+    ph_odom_noise_.publish(odom);
+    position_last_stamp_ = sim_time;
+  }
 }
 
 //}
 
 /* publishIMU() //{ */
 
-void UavSystemRos::publishIMU(const MultirotorModel::State &state) {
+void UavSystemRos::publishIMU(const MultirotorModel::State &state, const ros::Time & sim_time) {
 
-    static double sample_id = 0;
   sensor_msgs::Imu imu;
 
-  imu.header.stamp    = ros::Time::now();
+  imu.header.stamp    = sim_time;
   imu.header.frame_id = _frame_fcu_;
 
   imu.angular_velocity.x = state.omega(0);
@@ -551,22 +552,24 @@ void UavSystemRos::publishIMU(const MultirotorModel::State &state) {
   imu.orientation = mrs_lib::AttitudeConverter(state.R);
 
   ph_imu_.publish(imu);
-  // generate the noise and add it
-  
-  constexpr double PI = 3.14159265358979323846;
 
-  // add the noise 
-    double sample = gyro_gen_(gen);
-  imu.angular_velocity.x = gyro_noiseShapers_.at(0).iterate(sample);
-  imu.angular_velocity.y+= sin(2*PI*10*imu.header.stamp.toSec());
-  imu.angular_velocity.z = sample;
+  if(sim_time - imu_last_stamp_ >= imu_delay_){
+    imu_last_stamp_ = sim_time;
+    // add the noise 
+    imu.angular_velocity.x += gyro_noiseShapers_.at(0).iterate(gyro_gen_(gen));
+    imu.angular_velocity.y += gyro_noiseShapers_.at(1).iterate(gyro_gen_(gen));
+    imu.angular_velocity.z += gyro_noiseShapers_.at(2).iterate(gyro_gen_(gen));
 
 
-  imu.linear_acceleration.x= sample_id;
-  imu.linear_acceleration.y= imu.header.stamp.toSec();
-  imu.linear_acceleration.z+= accel_gen_(gen);
-  sample_id+=1;
-  ph_imu_noise_.publish(imu);
+    imu.linear_acceleration.x+= accel_noiseShapers_.at(0).iterate(accel_gen_(gen));
+    imu.linear_acceleration.y+= accel_noiseShapers_.at(1).iterate(accel_gen_(gen));
+    imu.linear_acceleration.z+= accel_noiseShapers_.at(2).iterate(accel_gen_(gen));
+
+    ph_imu_noise_.publish(imu);
+  }
+  else{
+    ROS_WARN("sim is: %ld last stamp: %ld, difference: %ld but wanted was %ld",sim_time.toNSec(), imu_last_stamp_.toNSec(),(sim_time - imu_last_stamp_).toNSec(),imu_delay_.toNSec());
+  }
 
 }
 
@@ -574,7 +577,7 @@ void UavSystemRos::publishIMU(const MultirotorModel::State &state) {
 
 /* publishRangefinder() //{ */
 
-void UavSystemRos::publishRangefinder(const MultirotorModel::State &state) {
+void UavSystemRos::publishRangefinder(const MultirotorModel::State &state, const ros::Time & sim_time) {
 
   // | ----------------------- publish tf ----------------------- |
 
@@ -599,7 +602,7 @@ void UavSystemRos::publishRangefinder(const MultirotorModel::State &state) {
   sensor_msgs::Range range;
 
   range.header.frame_id = _frame_rangefinder_;
-  range.header.stamp    = ros::Time::now();
+  range.header.stamp    = sim_time;
   range.max_range       = 40.0;
   range.min_range       = 0.0;
   range.range           = range_measurement;
@@ -609,13 +612,19 @@ void UavSystemRos::publishRangefinder(const MultirotorModel::State &state) {
   ph_rangefinder_.publish(range);
 
   //add the noise
-  range.range+= range_noiseShaper_.iterate(range_gen_(gen));
+  if(sim_time - range_last_stamp_ >= range_delay_){
+    range.range+= range_noiseShaper_.iterate(range_gen_(gen));
+    ph_rangefinder_noise_.publish(range);
+    range_last_stamp_ = sim_time;
+  }
+
+
 
   if (_publish_rangefinder_tf_) {
 
     geometry_msgs::TransformStamped tf;
 
-    tf.header.stamp    = ros::Time::now();
+    tf.header.stamp    = sim_time;
     tf.header.frame_id = _frame_fcu_;
     tf.child_frame_id  = _frame_rangefinder_;
 
@@ -628,33 +637,17 @@ void UavSystemRos::publishRangefinder(const MultirotorModel::State &state) {
     tf_broadcaster_->sendTransform(tf);
   }
 
-  if (_publish_fcu_tf_) {
-
-    geometry_msgs::TransformStamped tf;
-
-    tf.header.stamp    = ros::Time::now();
-    tf.header.frame_id = _frame_world_;
-    tf.child_frame_id  = _frame_fcu_;
-
-    tf.transform.translation.x = state.x(0);
-    tf.transform.translation.y = state.x(1);
-    tf.transform.translation.z = state.x(2);
-
-    tf.transform.rotation = mrs_lib::AttitudeConverter(state.R);
-
-    tf_broadcaster_->sendTransform(tf);
-  }
 }
 
 //}
 
 /* publishAltitude() //{ */
 
-void UavSystemRos::publishAltitude(const MultirotorModel::State &state) {
+void UavSystemRos::publishAltitude(const MultirotorModel::State &state, const ros::Time & sim_time) {
 
   nav_msgs::Odometry odom;
 
-  odom.header.stamp    = ros::Time::now();
+  odom.header.stamp    = sim_time;
   odom.header.frame_id = _frame_world_;
   odom.child_frame_id  = _frame_fcu_;
 
@@ -667,53 +660,45 @@ void UavSystemRos::publishAltitude(const MultirotorModel::State &state) {
   ph_altitude_.publish(odom);
   // add the noise
 
-  odom.pose.pose.position.z+= altitude_noiseShaper_.iterate(altitude_gen_(gen));
-  
-  ph_altitude_noise_.publish(odom);
+  if(sim_time - altitude_last_stamp_ >= altitude_delay_){
+    odom.pose.pose.position.z+= altitude_noiseShaper_.iterate(altitude_gen_(gen));
+    
+    ph_altitude_noise_.publish(odom);
+    altitude_last_stamp_ = sim_time;
+  }
 }
 
 //}
 
 /* publishMag() //{ */
 
-void UavSystemRos::publishMag(const MultirotorModel::State &state) {
+void UavSystemRos::publishMag(const MultirotorModel::State &state, const ros::Time & sim_time) {
 
 // TODO implement this
 
 
-    /*
   sensor_msgs::MagneticField mag;
 
-  mag.header.stamp    = ros::Time::now();
+  mag.header.stamp    = sim_time;
   mag.header.frame_id = _frame_fcu_;
 
-  mag.pose.pose.orientation = mrs_lib::AttitudeConverter(state.R);
-
-  mag.pose.pose.position.x = state.x(0);
-  mag.pose.pose.position.y = state.x(1);
-  mag.pose.pose.position.z = state.x(2);
-
-  Eigen::Vector3d vel_body = state.R.transpose() * state.v;
-
-  mag.twist.twist.linear.x = vel_body(0);
-  mag.twist.twist.linear.y = vel_body(1);
-  mag.twist.twist.linear.z = vel_body(2);
-
-  mag.twist.twist.angular.x = state.omega(0);
-  mag.twist.twist.angular.y = state.omega(1);
-  mag.twist.twist.angular.z = state.omega(2);
+  mag.magnetic_field.x = state.R(0,1);
+  mag.magnetic_field.y = state.R(1,1);
+  mag.magnetic_field.z = state.R(2,1);
 
   ph_mag_.publish(mag);
   // add the noise
 
-  mag.pose.pose.position.x+= position_gen(gen);
-  mag.pose.pose.position.y+= position_gen(gen);
-  mag.pose.pose.position.z+= altitude_gen(gen);
+  if(sim_time - mag_last_stamp_ >= mag_delay_){
+    mag.magnetic_field.x+= mag_noiseShapers_.at(0).iterate(mag_gen_(gen));
+    mag.magnetic_field.y+= mag_noiseShapers_.at(1).iterate(mag_gen_(gen));
+    mag.magnetic_field.z+= mag_noiseShapers_.at(2).iterate(mag_gen_(gen));
 
-    //TODO add the noise to the magnetometer
+        //TODO add the noise to the magnetometer
 
-  ph_mag_noise_.publish(mag);
-*/
+    ph_mag_noise_.publish(mag);
+    mag_last_stamp_ = sim_time;
+  }
 }
 
 //}

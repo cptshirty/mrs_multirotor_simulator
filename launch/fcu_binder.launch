@@ -54,6 +54,8 @@
     <remap from="~imu" to="/multirotor_simulator/uav1/imu_noise"/>
     <remap from="~odom" to="/multirotor_simulator/uav1/odom_noise"/>
     <remap from="~actuators_cmd" to="/multirotor_simulator/uav1/actuators_cmd"/>
+    <remap from="~altitude" to="/multirotor_simulator/uav1/altitude_noise"/>
+    <remap from="~magnetometer" to="/multirotor_simulator/uav1/magnetometer_noise"/>
     <!-- <remap from="~imu_out" to="~imu" /> -->
     <remap from="~clock_in" to="/clock" />
     <remap from="~uav_poses_out" to="~uav_poses" />

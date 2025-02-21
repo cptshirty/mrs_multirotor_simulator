@@ -105,11 +105,11 @@ private:
   mrs_lib::PublisherHandler<sensor_msgs::MagneticField> ph_mag_noise_;
   mrs_lib::PublisherHandler<nav_msgs::Odometry> ph_altitude_noise_;
 
-  void publishOdometry(const MultirotorModel::State& state);
-  void publishIMU(const MultirotorModel::State& state);
-  void publishRangefinder(const MultirotorModel::State& state);
-  void publishMag(const MultirotorModel::State& state);
-  void publishAltitude(const MultirotorModel::State& state);
+  void publishOdometry(const MultirotorModel::State& state, const ros::Time & sim_time);
+  void publishIMU(const MultirotorModel::State& state, const ros::Time & sim_time);
+  void publishRangefinder(const MultirotorModel::State& state, const ros::Time & sim_time);
+  void publishMag(const MultirotorModel::State& state, const ros::Time & sim_time);
+  void publishAltitude(const MultirotorModel::State& state, const ros::Time & sim_time);
 
 
 
