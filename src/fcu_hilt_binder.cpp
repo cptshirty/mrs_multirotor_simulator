@@ -81,7 +81,6 @@ namespace mrs_hitl_binders
         ReceiverState state = WAITING_FOR_SYNC0;
         // | ------------------------- params ------------------------- |
 
-
         ros::Time sim_time_;
         std::mutex mutex_sim_time_;
 
@@ -111,6 +110,8 @@ namespace mrs_hitl_binders
         mrs_lib::PublisherHandler<mrs_msgs::HwApiVelocityHdgCmd> ph_velocity_hdg_cmd_;
         mrs_lib::PublisherHandler<mrs_msgs::HwApiPositionCmd> ph_position_cmd_;
         mrs_lib::PublisherHandler<mrs_msgs::TrackerCommand> ph_tracker_cmd_;
+
+        mrs_lib::PublisherHandler<nav_msgs::Odometry> ph_pos_est_;
 
         // | ----------------------- subscribers ----------------------- |
 
@@ -148,6 +149,7 @@ namespace mrs_hitl_binders
         void calculateDelay(umsg_state_heartbeat_t heartbeat);
         uint32_t RosToFcu(ros::Time &rosTime);
         ros::Time FcuToRos(uint32_t &FcuTime);
+        void publishPosEst(umsg_estimation_position_t &msg);
 
         // | --------------- dynamic reconfigure server --------------- |
     };
@@ -222,6 +224,7 @@ namespace mrs_hitl_binders
 
         // | ----------------------- publishers ----------------------- |
         ph_actuator_cmd_ = mrs_lib::PublisherHandler<mrs_msgs::HwApiActuatorCmd>(nh_, "actuators_cmd", 1, false);
+        ph_pos_est_ = mrs_lib::PublisherHandler<nav_msgs::Odometry>(nh_, "position_estimation", 1, false);
         // ph_control_group_cmd_ = mrs_lib::PublisherHandler<mrs_msgs::HwApiControlGroupCmd>(nh_,uav_name + "/control_group_cmd",1,false);
 
         // | ----------------------- subscribers ----------------------- |
@@ -499,7 +502,6 @@ namespace mrs_hitl_binders
         notifyMsg.s.sensors.notifySensorData.GPS = 0;
         notifyMsg.s.sensors.notifySensorData.magnetometer = 0;
 
-
         std::scoped_lock lock(serial_mutex_);
         publishMag(msg, sim_time);
         notifyMsg.s.sensors.notifySensorData.magnetometer = 1;
@@ -517,15 +519,11 @@ namespace mrs_hitl_binders
 
     void FcuBinder::Receiver()
     {
-
-        if (!is_initialized_)
-        {
-            return;
-        }
+        state = WAITING_FOR_SYNC0;
         bool receptionComplete = false;
         ROS_INFO_ONCE("[FcuBinder]: ReceiverActive spinning");
-        size_t readBytes = 0; // amount of read bytes
-        size_t toRead = 0;    // amount of read bytes
+        int readBytes = 0; // amount of read bytes
+        int toRead = 0;    // amount of read bytes
         while (true)
         {
             switch (state)
@@ -642,19 +640,30 @@ namespace mrs_hitl_binders
                         is_synced_ = true;
                     }
                 }
+                else if (recvdMsg.s.msg_class == UMSG_ESTIMATION && recvdMsg.s.msg_type == ESTIMATION_POSITION)
+                {
+                    ROS_INFO_ONCE("publishing the position estimate");
+                    umsg_estimation_position_t pos_est = recvdMsg.s.estimation.position;
+                    publishPosEst(pos_est);
+                }
+                else
+                {
+                    ROS_WARN("received msg of class %d and type %d", recvdMsg.s.msg_class, recvdMsg.s.msg_type);
+                }
 
                 // flush
                 goto msg_flush;
             }
 
+            toRead += -readBytes;
             if (toRead > 0)
             {
-                readBytes = ser.readSerial(recvdMsg.raw + msg_len, toRead);
-                toRead = 0;
+
+                int received = ser.readSerial(recvdMsg.raw + msg_len + readBytes, toRead);
+                readBytes += received;
             }
 
             continue;
-
         msg_err:
 
             // NOTE: another buffer overflow issue here
@@ -667,8 +676,6 @@ namespace mrs_hitl_binders
             toRead = 0;
             receptionComplete = false;
         }
-
-        return;
     }
 
     void FcuBinder::timerSync(const ros::WallTimerEvent &event)
@@ -695,7 +702,7 @@ namespace mrs_hitl_binders
 
         sequential += 1;
 
-        //auto curr_time = mrs_lib::get_mutexed(mutex_sim_time_, sim_time_);
+        // auto curr_time = mrs_lib::get_mutexed(mutex_sim_time_, sim_time_);
         auto curr_time = ros::Time::now();
 
         {
@@ -713,9 +720,9 @@ namespace mrs_hitl_binders
 
     void FcuBinder::calculateDelay(umsg_state_heartbeat_t heartbeat)
     {
-        //auto curr_time = mrs_lib::get_mutexed(mutex_sim_time_, sim_time_);
-        
-         auto curr_time   = ros::Time::now();
+        // auto curr_time = mrs_lib::get_mutexed(mutex_sim_time_, sim_time_);
+
+        auto curr_time = ros::Time::now();
         auto [start_time, sequential] = mrs_lib::get_mutexed(mutex_sync_time, sync_time_ROS_send, sequence_number);
 
         ros::Duration diff;
@@ -757,6 +764,19 @@ namespace mrs_hitl_binders
         return syncTime_R + diff_R;
     }
 
+    void FcuBinder::publishPosEst(umsg_estimation_position_t &msg)
+    {
+        nav_msgs::Odometry odom_est;
+        odom_est.header.stamp = FcuToRos(msg.timestamp);
+        odom_est.pose.pose.position.x = msg.position[0];
+        odom_est.pose.pose.position.y = msg.position[1];
+        odom_est.pose.pose.position.z = msg.position[2];
+
+        odom_est.twist.twist.linear.x = msg.velocity[0];
+        odom_est.twist.twist.linear.y = msg.velocity[1];
+        odom_est.twist.twist.linear.z = msg.velocity[2];
+        ph_pos_est_.publish(odom_est);
+    }
 } // namespace mrs_multirotor_simulator
 
 #include <pluginlib/class_list_macros.h>

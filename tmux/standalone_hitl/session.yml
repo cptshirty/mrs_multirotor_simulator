@@ -19,11 +19,12 @@ windows:
       layout: tiled
       panes:
         - waitForRos; roslaunch mrs_multirotor_simulator fcu_binder.launch custom_config:=./custom_configs/simulator.yaml
-        - waitForRos;sleep 1 ;rostopic echo /multirotor_simulator/uav1/imu_noise
+        - waitForRos;sleep 1 ;rostopic echo /multirotor_simulator/uav1/odom
   - goto:
       layout: tiled
       panes:
-        - 'history -s ./goto.py'
+          - waitForRos; rosrun plotjuggler plotjuggler -l custom_configs/juggler-layout.xml
+  
   - rviz:
       layout: tiled
       panes:
