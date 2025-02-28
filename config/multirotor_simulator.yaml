@@ -64,10 +64,10 @@ position_rate: 10.0 #[Hz]
 
 range_rate: 1.0 #[Hz]
 
-accel_stddev: 1.0 # [m/s^2] 
+accel_stddev: 10.0 # [m/s^2] 
 accel_bias: 0.0 # [m/s^2]
 
-gyro_stddev: 1.0 # [rad/s]
+gyro_stddev: 10.0 # [rad/s]
 gyro_bias: 0.0 # [rad/s]
 
 altitude_stddev: 0.0 # [m]

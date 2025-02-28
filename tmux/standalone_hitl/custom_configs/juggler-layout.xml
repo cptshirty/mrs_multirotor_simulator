@@ -1,25 +1,29 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <root>
- <tabbed_widget name="Main Window" parent="main_window">
+ <tabbed_widget parent="main_window" name="Main Window">
   <Tab tab_name="tab1" containers="1">
    <Container>
-    <DockSplitter count="2" sizes="0.500255;0.499745" orientation="-">
+    <DockSplitter count="2" sizes="0.500258;0.499742" orientation="-">
      <DockArea name="...">
-      <plot style="Lines" flip_x="false" flip_y="false" mode="TimeSeries">
-       <range bottom="-0.100000" right="15.619000" top="0.100000" left="10.619000"/>
+      <plot style="Lines" flip_y="false" mode="TimeSeries" flip_x="false">
+       <range left="0.364000" top="0.003496" right="5.365000" bottom="-0.003391"/>
        <limitY/>
        <curve name="/multirotor_simulator/uav1/odom/twist/twist/linear/x" color="#1f77b4"/>
        <curve name="/multirotor_simulator/uav1/odom/twist/twist/linear/y" color="#d62728"/>
        <curve name="/multirotor_simulator/uav1/odom/twist/twist/linear/z" color="#1ac938"/>
+       <curve name="/fcu_binder/position_estimation/twist/twist/linear/x" color="#1ac938"/>
+       <curve name="/fcu_binder/position_estimation/twist/twist/linear/y" color="#ff7f0e"/>
       </plot>
      </DockArea>
      <DockArea name="...">
-      <plot style="Lines" flip_x="false" flip_y="false" mode="TimeSeries">
-       <range bottom="-0.375000" right="15.619000" top="15.375000" left="10.619000"/>
+      <plot style="Lines" flip_y="false" mode="TimeSeries" flip_x="false">
+       <range left="0.364000" top="0.000697" right="5.365000" bottom="-0.000691"/>
        <limitY/>
        <curve name="/multirotor_simulator/uav1/odom/pose/pose/position/x" color="#ff7f0e"/>
        <curve name="/multirotor_simulator/uav1/odom/pose/pose/position/y" color="#f14cc1"/>
        <curve name="/multirotor_simulator/uav1/odom/pose/pose/position/z" color="#9467bd"/>
+       <curve name="/fcu_binder/position_estimation/pose/pose/position/x" color="#1f77b4"/>
+       <curve name="/fcu_binder/position_estimation/pose/pose/position/y" color="#d62728"/>
       </plot>
      </DockArea>
     </DockSplitter>
@@ -32,7 +36,7 @@
  <!-- - - - - - - - - - - - - - - -->
  <Plugins>
   <plugin ID="DataLoad CSV">
-   <parameters time_axis="" delimiter="0"/>
+   <parameters delimiter="0" time_axis=""/>
   </plugin>
   <plugin ID="DataLoad MCAP"/>
   <plugin ID="DataLoad ROS bags">
@@ -50,7 +54,7 @@
    <max_array_size value="100"/>
    <boolean_strings_to_number value="true"/>
    <remove_suffix_from_strings value="true"/>
-   <selected_topics value="/multirotor_simulator/uav1/odom"/>
+   <selected_topics value="/fcu_binder/position_estimation;/multirotor_simulator/uav1/odom"/>
   </plugin>
   <plugin ID="UDP Server"/>
   <plugin ID="WebSocket Server"/>
