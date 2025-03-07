@@ -93,7 +93,8 @@ target_link_libraries(MrsMultirotorSimulator_Simulator
 # - pluginlib library for interfacing the Simulator with the MRS UAV System
 
 add_library(MrsMultirotorSimulator_HwApiPlugin
-  src/hw_api_plugin.cpp
+  src/hw_api_mrs_fcu.cpp
+  src/serial_port.cpp
   )
 
 add_dependencies(MrsMultirotorSimulator_HwApiPlugin
@@ -102,6 +103,7 @@ add_dependencies(MrsMultirotorSimulator_HwApiPlugin
   )
 
 target_link_libraries(MrsMultirotorSimulator_HwApiPlugin
+  uMsgLib
   ${catkin_LIBRARIES}
   ${Eigen_LIBRARIES}
   )

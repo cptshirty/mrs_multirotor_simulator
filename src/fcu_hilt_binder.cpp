@@ -122,12 +122,15 @@ namespace mrs_hitl_binders
         mrs_lib::SubscribeHandler<sensor_msgs::MagneticField> sh_mag_;
         mrs_lib::SubscribeHandler<rosgraph_msgs::Clock> sh_clock_;
 
+        mrs_lib::SubscribeHandler<geometry_msgs::PoseStamped> sh_goto_;
+
         void callbackOdometry(const nav_msgs::Odometry::ConstPtr msg);
         void callbackIMU(const sensor_msgs::Imu::ConstPtr msg);
         void callbackRangeFinder(const sensor_msgs::Range::ConstPtr msg);
         void callbackAltitude(const nav_msgs::Odometry::ConstPtr msg);
         void callbackMag(const sensor_msgs::MagneticField::ConstPtr msg);
         void callbackTime(const rosgraph_msgs::Clock::ConstPtr msg);
+        void callbackGoto(const geometry_msgs::PoseStamped::ConstPtr msg);
 
         void publishImu(const sensor_msgs::Imu::ConstPtr msg, ros::Time &sim_time);
         void publishMag(const sensor_msgs::MagneticField::ConstPtr msg, ros::Time &sim_time);
@@ -243,7 +246,7 @@ namespace mrs_hitl_binders
         sh_altitude_ = mrs_lib::SubscribeHandler<nav_msgs::Odometry>(shopts, "altitude", &FcuBinder::callbackAltitude, this);
         sh_mag_ = mrs_lib::SubscribeHandler<sensor_msgs::MagneticField>(shopts, "magnetometer", &FcuBinder::callbackMag, this);
         sh_clock_ = mrs_lib::SubscribeHandler<rosgraph_msgs::Clock>(shopts, "clock_in", &FcuBinder::callbackTime, this);
-
+        sh_goto_ = mrs_lib::SubscribeHandler<geometry_msgs::PoseStamped>(shopts, "goal", &FcuBinder::callbackGoto, this);
         timer_sync_ = nh_.createWallTimer(ros::WallDuration(1.00), &FcuBinder::timerSync, this);
 
         // | ----------------------- finish init ---------------------- |
@@ -440,6 +443,38 @@ namespace mrs_hitl_binders
         ser.sendCharArray(notifyMsg.raw, notifyMsg.s.len);
         // ROS_INFO("[FcuBinder]: IMU Duration %d",diff_to_now.toNSec());
         //  toto send the message over the serial
+    }
+
+    void FcuBinder::callbackGoto(const geometry_msgs::PoseStamped::ConstPtr msg)
+    {
+        if (!is_synced_)
+        {
+            return;
+        }
+        // counts on the origin being the same as the sim origin
+        // fill the packet header
+        ros::Time sim_time = msg->header.stamp;
+
+        umsg_MessageToTransfer GoalMsg;
+        GoalMsg.s.sync0 = 'M';
+        GoalMsg.s.sync1 = 'R';
+        GoalMsg.s.msg_class = UMSG_AUTONOMY;
+        GoalMsg.s.msg_type = AUTONOMY_POSITIONGOAL;
+        GoalMsg.s.autonomy.PositionGoal.goal[0] = msg->pose.position.x;
+        GoalMsg.s.autonomy.PositionGoal.goal[1] = msg->pose.position.y;
+        GoalMsg.s.autonomy.PositionGoal.goal[2] = 10.0;
+        GoalMsg.s.autonomy.PositionGoal.velocity = 4;
+        GoalMsg.s.autonomy.PositionGoal.timestamp = RosToFcu(sim_time);
+
+        std::scoped_lock lock(serial_mutex_);
+
+        ROS_INFO("[FcuBinder]: GOAL CALLBACK called");
+
+        uint32_t len = UMSG_HEADER_SIZE;
+        len += sizeof(umsg_autonomy_PositionGoal_t) + 1;
+        GoalMsg.s.len = len;
+        GoalMsg.raw[len - 1] = umsg_calcCRC(GoalMsg.raw, len - 1);
+        ser.sendCharArray(GoalMsg.raw, GoalMsg.s.len);
     }
 
     void FcuBinder::callbackRangeFinder(const sensor_msgs::Range::ConstPtr msg)
