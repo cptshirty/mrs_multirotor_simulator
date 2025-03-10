@@ -21,7 +21,6 @@ set(CATKIN_DEPENDENCIES
   sensor_msgs
   std_msgs
   std_srvs
-  serial
   )
 
 find_package(catkin REQUIRED COMPONENTS
@@ -89,12 +88,16 @@ target_link_libraries(MrsMultirotorSimulator_Simulator
   ${Eigen_LIBRARIES}
   )
 
+set(UMSG_PORT "POSIX")
+add_subdirectory(umsg_lib)
+
 # Hw API Plugin
 # - pluginlib library for interfacing the Simulator with the MRS UAV System
 
 add_library(MrsMultirotorSimulator_HwApiPlugin
   src/hw_api_mrs_fcu.cpp
   src/serial_port.cpp
+  src/SerialApi.cpp
   )
 
 add_dependencies(MrsMultirotorSimulator_HwApiPlugin
@@ -111,8 +114,6 @@ target_link_libraries(MrsMultirotorSimulator_HwApiPlugin
 # Hw API Plugin
 # - pluginlib library for interfacing the Simulator with the MRS UAV System
 
-set(UMSG_PORT "POSIX")
-add_subdirectory(umsg_lib)
 
 add_library(MrsMultirotorSimulator_FcuBinder
   src/fcu_hilt_binder.cpp
