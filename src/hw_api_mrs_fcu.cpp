@@ -80,7 +80,7 @@ namespace mrs_uav_fcu_api
 
     public:
         void Init(const ros::NodeHandle &parent_nh, std::shared_ptr<SerialApi> ser_);
-        void ProcessIncomingMessage(umsg_MessageToTransfer &msg);
+        void ParseMessage(umsg_MessageToTransfer &msg);
     };
 
     void hitl_binder::Init(const ros::NodeHandle &parent_nh, std::shared_ptr<SerialApi> ser_)
@@ -423,18 +423,18 @@ namespace mrs_uav_fcu_api
 
         void publishOdometryLocal(const nav_msgs::Odometry::ConstPtr msg);
         void publishNavsatFix(const sensor_msgs::NavSatFix::ConstPtr msg);
-        void publishDistanceSensor(const sensor_msgs::Range::ConstPtr msg);
-        void publishImu(const sensor_msgs::Imu::ConstPtr msg);
-        void publishMagnetometer(const std_msgs::Float64::ConstPtr msg);
-        void publishMagneticField(const sensor_msgs::MagneticField::ConstPtr msg);
-        void publishRC(const mavros_msgs::RCIn::ConstPtr msg);
+        void publishDistanceSensor(const sensor_msgs::Range::ConstPtr msg); // not yet implemented
+        void publishImu(const umsg_sensors_imu_t &msg);
+        void publishMagnetometer(const umsg_sensors_mag_t &msg);
+        void publishMagneticField(const umsg_sensors_mag_t &msg);
+        void publishRC(const umsg_control_sBusPacket_t &msg);
         void publishAltitude(const mavros_msgs::Altitude::ConstPtr msg);
-        void publishGpsStatusRaw(const mavros_msgs::GPSRAW::ConstPtr msg);
-        void publishBattery(const sensor_msgs::BatteryState::ConstPtr msg);
+        void publishGpsStatusRaw(const umsg_sensors_gps_t &msg);
+        void publishBattery(const sensor_msgs::BatteryState::ConstPtr msg); // not yet implemented
 
-        void ProcessIncomingMessage(umsg_MessageToTransfer &msg);
+        void messageParser();
 
-        void ReceiveMessages();
+        void ParseMessage(umsg_MessageToTransfer &msg);
         // | ------------------------ variables ----------------------- |
 
         std::string uav_name;
@@ -531,6 +531,8 @@ namespace mrs_uav_fcu_api
 
         ser_ = std::make_shared<SerialApi>(serial_port, baud_rate);
 
+        ser_->startReceiver();
+        ser_->startSyncTimer(nh_);
         ROS_INFO("[MrsUavFcuApi]: initialized");
         is_initialized_ = true;
     }
@@ -1057,7 +1059,7 @@ namespace mrs_uav_fcu_api
 
     /* callbackAltitude() //{ */
 
-    void MrsUavFcuApi::publishGpsStatusRaw(const mavros_msgs::GPSRAW::ConstPtr msg)
+    void MrsUavFcuApi::publishGpsStatusRaw(const umsg_sensors_gps_t &msg)
     {
 
         if (!is_initialized_)
@@ -1072,27 +1074,30 @@ namespace mrs_uav_fcu_api
 
             mrs_msgs::GpsInfo gps_info_out;
 
-            gps_info_out.stamp = msg->header.stamp; // [GPS_FIX_TYPE] GPS fix type
-            gps_info_out.fix_type = msg->fix_type;  // [GPS_FIX_TYPE] GPS fix type
+            gps_info_out.stamp = ser_->FcuToRos(msg.timestamp); // [GPS_FIX_TYPE] GPS fix type
+            gps_info_out.fix_type = msg.fixType;                // [GPS_FIX_TYPE] GPS fix type
 
-            gps_info_out.lat = double(msg->lat) / 10000000;            // [deg] Latitude (WGS84, EGM96 ellipsoid)
-            gps_info_out.lon = double(msg->lon) / 10000000;            // [deg] Longitude (WGS84, EGM96 ellipsoid)
-            gps_info_out.alt = float(msg->alt) / 1000;                 // [m]  (MSL). Positive for up. Not WGS84 altitude.
-            gps_info_out.eph = msg->eph;                               // GPS HDOP horizontal dilution of position (unitless). If unknown, set to: UINT16_MAX
-            gps_info_out.epv = msg->epv;                               // GPS VDOP vertical dilution of position (unitless). If unknown, set to: UINT16_MAX
-            gps_info_out.vel = float(msg->vel) / 100;                  // [m/s] GPS ground speed. If unknown, set to: UINT16_MAX
-            gps_info_out.cog = float(msg->cog) / 100;                  // [deg] Course over ground (NOT heading, but direction of movement), 0.0..359.99 degrees.
-            gps_info_out.satellites_visible = msg->satellites_visible; // Number of satellites visible. If unknown, set to 255
+            gps_info_out.lat = msg.lat; // [deg] Latitude (WGS84, EGM96 ellipsoid)
+            gps_info_out.lon = msg.lon;
+            gps_info_out.alt = msg.hMSL;   // [m]  (MSL). Positive for up. Not WGS84 altitude.
+            gps_info_out.eph = UINT16_MAX; // GPS HDOP horizontal dilution of position (unitless). If unknown, set to: UINT16_MAX
+            gps_info_out.epv = UINT16_MAX; // GPS VDOP vertical dilution of position (unitless). If unknown, set to: UINT16_MAX
+            // TODO ASK ABOUT THIS
+            gps_info_out.vel = 0; // [m/s] GPS ground speed. If unknown, set to: UINT16_MAX
+            gps_info_out.cog = 0;
+            // [deg] Course over ground (NOT heading, but direction of movement), 0.0..359.99 degrees.
+            gps_info_out.satellites_visible = msg.numSV; // Number of satellites visible. If unknown, set to 255
 
-            gps_info_out.alt_ellipsoid = float(msg->alt_ellipsoid) / 1000; // [m] Altitude (above WGS84, EGM96 ellipsoid). Positive for up.
-            gps_info_out.h_acc = float(msg->h_acc) / 1000;                 // [m] Position uncertainty. Positive for up.
-            gps_info_out.v_acc = float(msg->v_acc) / 1000;                 // [m] Altitude uncertainty. Positive for up.
-            gps_info_out.vel_acc = float(msg->vel_acc) / 1000;             // [m/s] Speed uncertainty. Positive for up.
-            gps_info_out.hdg_acc = float(msg->hdg_acc) / 1000;             // [deg] Heading / track uncertainty
-            gps_info_out.yaw = float(msg->yaw) / 100;                      // [deg] Yaw in earth frame from north.
-            gps_info_out.dgps_num_sats = msg->dgps_numch;                  // Number of DGPS satellites
-            gps_info_out.dgps_age = float(msg->dgps_age) / 1000;           // [s] Age of DGPS info
-            gps_info_out.baseline_dist = 0;                                // [m] distance to the basestation, not supported by the GPSRAW message
+            gps_info_out.alt_ellipsoid = msg.hELPS; // [m] Altitude (above WGS84, EGM96 ellipsoid). Positive for up.
+            // TODO ASK ABOUT THIS
+            gps_info_out.h_acc = 0;         // [m] Position uncertainty. Positive for up.
+            gps_info_out.v_acc = 0;         // [m] Altitude uncertainty. Positive for up.
+            gps_info_out.vel_acc = 0;       // [m/s] Speed uncertainty. Positive for up.
+            gps_info_out.hdg_acc = 0;       // [deg] Heading / track uncertainty
+            gps_info_out.yaw = 0;           // [deg] Yaw in earth frame from north.
+            gps_info_out.dgps_num_sats = 0; // Number of DGPS satellites
+            gps_info_out.dgps_age = 0;      // [s] Age of DGPS info
+            gps_info_out.baseline_dist = 0; // [m] distance to the basestation, not supported by the GPSRAW message
 
             common_handlers_->publishers.publishGNSSStatus(gps_info_out);
         }
@@ -1255,7 +1260,78 @@ namespace mrs_uav_fcu_api
         common_handlers_->publishers.publishRTK(rtk_msg_out);
     }
 
-    //}
+    void MrsUavFcuApi::ParseMessage(umsg_MessageToTransfer &msg)
+    {
+        uint8_t msg_class = msg.s.msg_class;
+        uint8_t msg_type = msg.s.msg_type;
+
+        bool parsed = true;
+
+        switch (msg_class)
+        {
+        case UMSG_SENSORS:
+        {
+            switch (msg_type)
+            {
+            case SENSORS_IMU:
+                break;
+            case SENSORS_GPS:
+                break;
+            case SENSORS_ALTIMETER:
+                break;
+            case SENSORS_MAG:
+                break;
+
+            default:
+                parsed = false;
+                break;
+            }
+        }
+        break;
+        case UMSG_STATE:
+        {
+            switch (msg_type)
+            {
+            case STATE_UAV_STATE:
+                break;
+
+            default:
+                parsed = false;
+                break;
+            }
+        }
+        break;
+
+        case UMSG_ESTIMATION:
+        {
+            switch (msg_type)
+            {
+            case ESTIMATION_ATTITUDE:
+                break;
+            case ESTIMATION_POSITION:
+                break;
+
+            default:
+                parsed = false;
+                break;
+            }
+        }
+        break;
+
+        default:
+            break;
+        }
+    }
+
+    void MrsUavFcuApi::messageParser()
+    {
+
+        while (true)
+        {
+            umsg_MessageToTransfer msg = ser_->waitForPacket();
+            ParseMessage(msg);
+        }
+    };
 
     // | ------------------------- methods ------------------------ |
 
@@ -1291,6 +1367,7 @@ namespace mrs_uav_fcu_api
     {
         return;
     }
+    //}
 
 } // namespace mrs_uav_px4_api
 

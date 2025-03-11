@@ -2,6 +2,13 @@ hw_interface_plugin: "mrs_uav_fcu_api/Api"
 
 comms_timeout: 1.0 # [s]
 
+serial_port: "/dev/ttyUSB0"
+baud_rate: 2000000
+
+
+
+
+
 simulated_rtk:
   utm_zone: "32T"
   utm_x: 465710.758973

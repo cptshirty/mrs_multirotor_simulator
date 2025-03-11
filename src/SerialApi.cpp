@@ -2,6 +2,37 @@
 #include <umsg.h>
 #include <mrs_lib/mutex.h>
 
+CountingSemaphore::CountingSemaphore(int max_count)
+{
+    max_count_ = (max_count);
+    count = 0;
+};
+
+void CountingSemaphore::aquire()
+{
+    std::unique_lock<std::mutex> lock(mtx);
+    cv.wait(lock, [this]
+            { return count > 0; });
+    --count;
+}
+
+void CountingSemaphore::release()
+{
+
+    std::unique_lock<std::mutex> lock(mtx);
+    if (count < max_count_)
+    {
+        ++count;
+        cv.notify_one();
+    }
+}
+
+int CountingSemaphore::getVal()
+{
+    std::unique_lock<std::mutex> lock(mtx);
+    return count;
+}
+
 SerialApi::SerialApi(/* args */)
 {
 }
@@ -14,7 +45,7 @@ SerialApi::SerialApi(std::string dev, int baudrate)
         return;
     }
     ser.setBlocking(ser.serial_port_fd_, sizeof(umsg_MessageToTransfer));
-
+    q_lock = std::make_unique<CountingSemaphore>(max_packets_in_q);
     umsg_CRCInit();
 }
 
@@ -107,16 +138,21 @@ void SerialApi::startSyncTimer(ros::NodeHandle &nh_)
     timer_sync_ = nh_.createWallTimer(ros::WallDuration(1.00), &SerialApi::timerSync, this);
 }
 
-bool SerialApi::waitForPacket(umsg_MessageToTransfer &msg)
+umsg_MessageToTransfer SerialApi::waitForPacket()
 {
-    ROS_ERROR("[SerialApi]wait for packet not yet implemented!");
+
+    q_lock->aquire();
+    umsg_MessageToTransfer msg = outQ.front();
+    outQ.pop();
+    return msg;
 }
 
 void SerialApi::sendPacket(umsg_MessageToTransfer &msg)
 {
-    std::scoped_lock lock(serial_mutex_);
+    std::unique_lock lock(serial_mutex_);
     ser.sendCharArray(msg.raw, msg.s.len);
 }
+
 void SerialApi::Receiver()
 {
     state = WAITING_FOR_SYNC0;
@@ -214,6 +250,8 @@ void SerialApi::Receiver()
 
         if (receptionComplete)
         {
+            ROS_INFO("[SerialApi] packet class %d packet type %d", recvdMsg.s.msg_class, recvdMsg.s.msg_type);
+            // ROS_INFO("[SerialApi] packet Receive");
             if (recvdMsg.s.msg_class == UMSG_STATE && recvdMsg.s.msg_type == STATE_HEARTBEAT)
             {
 
@@ -222,13 +260,22 @@ void SerialApi::Receiver()
                 calculateDelay(beat);
                 if (!is_synced_)
                 {
-                    calculateDelay(beat);
                     is_synced_ = true;
                 }
             }
             else
             {
-                ROS_ERROR("[SerialApi] receiver synchronization with the functions is not yet implemented");
+                int num_msgs = q_lock->getVal();
+                ROS_INFO("there is %d msgs in queue", num_msgs);
+                if (num_msgs < max_packets_in_q)
+                {
+                    q_lock->release();
+                    outQ.push(recvdMsg);
+                }
+                else
+                {
+                    ROS_ERROR("[SerialApi] queue is full functions is not yet implemented");
+                }
             }
             // flush
             goto msg_flush;
@@ -237,8 +284,10 @@ void SerialApi::Receiver()
         toRead += -readBytes;
         if (toRead > 0)
         {
+            // ROS_INFO("[SerialApi] there are %d bytes to read", toRead);
 
             int received = ser.readSerial(recvdMsg.raw + msg_len + readBytes, toRead);
+            // ROS_INFO("[SerialApi] there was %d bytes received", received);
             readBytes += received;
         }
 

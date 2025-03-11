@@ -6,7 +6,7 @@ attach: false
 tmux_options: -f /etc/ctu-mrs/tmux.conf
 # you can modify these
 pre_window: export UAV_NAME=uav1; export RUN_TYPE=simulation; export UAV_TYPE=robofly
-startup_window: control
+startup_window: hw_api
 windows:
   - roscore:
       layout: tiled
@@ -23,8 +23,8 @@ windows:
   - takeoff:
       layout: tiled
       panes:
-        - waitForHw; roslaunch mrs_uav_autostart automatic_start.launch custom_config:=./config/automatic_start.yaml
-        - waitForControl; rosservice call /$UAV_NAME/hw_api/arming 1; sleep 2; rosservice call /$UAV_NAME/hw_api/offboard
+        #- waitForHw; roslaunch mrs_uav_autostart automatic_start.launch custom_config:=./config/automatic_start.yaml
+        #- waitForControl; rosservice call /$UAV_NAME/hw_api/arming 1; sleep 2; rosservice call /$UAV_NAME/hw_api/offboard
         # - waitForControl; rosservice call /$UAV_NAME/hw_api/arming 1; rosservice call /$UAV_NAME/uav_manager/midair_activation
   - status:
       layout: tiled
@@ -47,4 +47,4 @@ windows:
   - layout:
       layout: tiled
       panes:
-        - waitForControl; sleep 5; ~/.i3/layout_manager.sh ./layout.json
+      #  - waitForControl; sleep 5; ~/.i3/layout_manager.sh ./layout.json

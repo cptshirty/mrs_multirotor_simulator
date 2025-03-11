@@ -4,6 +4,9 @@
 #include <umsg_classes.h>
 #include <umsg_state.h>
 #include <thread>
+#include <condition_variable>
+#include <mutex>
+#include <queue>
 
 enum ReceiverState
 {
@@ -14,25 +17,44 @@ enum ReceiverState
     INVALID_MSG,
 };
 
+class CountingSemaphore
+{
+public:
+    CountingSemaphore(int max_count);
+    void aquire();
+    void release();
+    int getVal();
+
+private:
+    int count;
+    int max_count_ = 1;
+    std::mutex mtx;
+    std::condition_variable cv;
+};
+
 class SerialApi
 {
 private:
+    const int max_packets_in_q = 10;
     std::thread recvThread_;
     void Receiver();
-    ros::WallTimer timer_sync_;
-    void timerSync(const ros::WallTimerEvent &event);
 
     std::mutex mutex_sync_time;
     ros::Time sync_time_ROS_send;
     uint32_t sequence_number = 0;
     std::mutex mutex_sync_result;
     std::tuple<ros::Time, uint32_t> sync_result;
+    std::atomic<bool> is_synced_ = false;
+
+    ros::WallTimer timer_sync_;
+    void timerSync(const ros::WallTimerEvent &event);
 
     std::mutex serial_mutex_;
     SerialPort ser;
-    std::atomic<bool> is_synced_ = false;
     umsg_MessageToTransfer recvdMsg;
     uint32_t msg_len = 0;
+    std::unique_ptr<CountingSemaphore> q_lock;
+    std::queue<umsg_MessageToTransfer> outQ;
     ReceiverState state = WAITING_FOR_SYNC0;
     void calculateDelay(umsg_state_heartbeat_t heartbeat);
 
@@ -43,7 +65,7 @@ public:
     void startReceiver();
     void startSyncTimer(ros::NodeHandle &nh_);
 
-    bool waitForPacket(umsg_MessageToTransfer &msg);
+    umsg_MessageToTransfer waitForPacket();
 
     void sendPacket(umsg_MessageToTransfer &msg);
     uint32_t RosToFcu(const ros::Time &rosTime);
