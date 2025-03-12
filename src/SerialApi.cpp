@@ -250,8 +250,8 @@ void SerialApi::Receiver()
 
         if (receptionComplete)
         {
-            ROS_INFO("[SerialApi] packet class %d packet type %d", recvdMsg.s.msg_class, recvdMsg.s.msg_type);
-            // ROS_INFO("[SerialApi] packet Receive");
+            // ROS_INFO("[SerialApi] packet class %d packet type %d", recvdMsg.s.msg_class, recvdMsg.s.msg_type);
+            //  ROS_INFO("[SerialApi] packet Receive");
             if (recvdMsg.s.msg_class == UMSG_STATE && recvdMsg.s.msg_type == STATE_HEARTBEAT)
             {
 
@@ -265,16 +265,17 @@ void SerialApi::Receiver()
             }
             else
             {
+
                 int num_msgs = q_lock->getVal();
-                ROS_INFO("there is %d msgs in queue", num_msgs);
                 if (num_msgs < max_packets_in_q)
                 {
-                    q_lock->release();
+                    // ROS_INFO("pushing msg class %d and type %d", recvdMsg.s.msg_class, recvdMsg.s.msg_type);
                     outQ.push(recvdMsg);
+                    q_lock->release();
                 }
                 else
                 {
-                    ROS_ERROR("[SerialApi] queue is full functions is not yet implemented");
+                    ROS_ERROR("[SerialApi] queue is full");
                 }
             }
             // flush

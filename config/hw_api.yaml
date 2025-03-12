@@ -2,9 +2,6 @@ hw_interface_plugin: "mrs_uav_fcu_api/Api"
 
 comms_timeout: 1.0 # [s]
 
-serial_port: "/dev/ttyUSB0"
-baud_rate: 2000000
-
 
 
 

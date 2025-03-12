@@ -1,5 +1,5 @@
-simulation_rate: 250
-clock_rate: 250
+simulation_rate: 1000
+clock_rate: 1000
 realtime_factor: 1.0
 
 iterate_without_input: true
@@ -12,7 +12,7 @@ uav_names: [
 ]
 
 uav1:
-  type: "robofly"
+  type: "f450"
   spawn:
     x: 10.0
     y: 15.0

@@ -79,18 +79,18 @@ namespace mrs_uav_fcu_api
         mrs_lib::PublisherHandler<mrs_msgs::HwApiActuatorCmd> ph_actuator_cmd_;
 
     public:
-        void Init(const ros::NodeHandle &parent_nh, std::shared_ptr<SerialApi> ser_);
-        void ParseMessage(umsg_MessageToTransfer &msg);
+        void Init(const ros::NodeHandle &parent_nh, std::shared_ptr<SerialApi> ser);
+        bool ParseMessage(umsg_MessageToTransfer &msg);
     };
 
-    void hitl_binder::Init(const ros::NodeHandle &parent_nh, std::shared_ptr<SerialApi> ser_)
+    void hitl_binder::Init(const ros::NodeHandle &parent_nh, std::shared_ptr<SerialApi> ser)
     {
+        ser_ = ser;
         double startLat, startLon;
 
         ros::NodeHandle nh_(parent_nh);
 
-        mrs_lib::ParamLoader param_loader(nh_, "hwApi");
-
+        mrs_lib::ParamLoader param_loader(nh_, "hitl_binder");
         param_loader.loadParam("start_latitude", startLat);
         param_loader.loadParam("start_longditude", startLon);
 
@@ -104,15 +104,15 @@ namespace mrs_uav_fcu_api
         shopts.autostart = true;
         shopts.queue_size = 1;
         shopts.transport_hints = ros::TransportHints().tcpNoDelay();
-        sh_imu_ = mrs_lib::SubscribeHandler<sensor_msgs::Imu>(shopts, "imu", &hitl_binder::callbackIMU, this);
-        sh_odom_ = mrs_lib::SubscribeHandler<nav_msgs::Odometry>(shopts, "odom", &hitl_binder::callbackOdometry, this);
-        sh_rangefinder_ = mrs_lib::SubscribeHandler<sensor_msgs::Range>(shopts, "rangefinder", &hitl_binder::callbackRangeFinder, this);
-        sh_altitude_ = mrs_lib::SubscribeHandler<nav_msgs::Odometry>(shopts, "altitude", &hitl_binder::callbackAltitude, this);
-        sh_mag_ = mrs_lib::SubscribeHandler<sensor_msgs::MagneticField>(shopts, "magnetometer", &hitl_binder::callbackMag, this);
+        sh_imu_ = mrs_lib::SubscribeHandler<sensor_msgs::Imu>(shopts, "hitl/imu", &hitl_binder::callbackIMU, this);
+        sh_odom_ = mrs_lib::SubscribeHandler<nav_msgs::Odometry>(shopts, "hitl/odom", &hitl_binder::callbackOdometry, this);
+        // sh_rangefinder_ = mrs_lib::SubscribeHandler<sensor_msgs::Range>(shopts, "hitl/rangefinder", &hitl_binder::callbackRangeFinder, this);
+        sh_altitude_ = mrs_lib::SubscribeHandler<nav_msgs::Odometry>(shopts, "hitl/altitude", &hitl_binder::callbackAltitude, this);
+        sh_mag_ = mrs_lib::SubscribeHandler<sensor_msgs::MagneticField>(shopts, "hitl/magnetometer", &hitl_binder::callbackMag, this);
 
         ROS_INFO("SELECTED UTM ZONE IS : %s", UTM_zone.c_str());
 
-        ph_actuator_cmd_ = mrs_lib::PublisherHandler<mrs_msgs::HwApiActuatorCmd>(nh_, "actuators_cmd", 1, false);
+        ph_actuator_cmd_ = mrs_lib::PublisherHandler<mrs_msgs::HwApiActuatorCmd>(nh_, "hitl/actuators_cmd", 1, false);
     };
 
     // PublishImu//{
@@ -284,8 +284,8 @@ namespace mrs_uav_fcu_api
         notifyMsg.s.len = len;
         notifyMsg.raw[len - 1] = umsg_calcCRC(notifyMsg.raw, len - 1);
         ser_->sendPacket(notifyMsg);
-        // ROS_INFO("[FcuBinder]: IMU Duration %d",diff_to_now.toNSec());
-        //  toto send the message over the serial
+        //  ROS_INFO("[FcuBinder]: IMU Duration %d",diff_to_now.toNSec());
+        //   toto send the message over the serial
     }
 
     void hitl_binder::callbackRangeFinder(const sensor_msgs::Range::ConstPtr msg)
@@ -360,6 +360,48 @@ namespace mrs_uav_fcu_api
         //  toto send the message over the serial
     }
 
+    bool hitl_binder::ParseMessage(umsg_MessageToTransfer &msg)
+    {
+        uint8_t msg_class = msg.s.msg_class;
+        uint8_t msg_type = msg.s.msg_type;
+
+        bool parsed = true;
+
+        switch (msg_class)
+        {
+        case UMSG_CONTROL:
+        {
+            switch (msg_type)
+            {
+                ROS_INFO("received DSHOT MSG");
+            case CONTROL_DSHOTMESSAGE:
+            {
+                mrs_msgs::HwApiActuatorCmd cmd;
+                umsg_control_DshotMessage_t DshotMessage = msg.s.control.DshotMessage;
+                cmd.stamp = ser_->FcuToRos(DshotMessage.timestamp);
+
+                for (size_t i = 0; i < 4; i++)
+                {
+                    cmd.motors.push_back(static_cast<float>(DshotMessage.channels[i]) / 2048.);
+                }
+                ph_actuator_cmd_.publish(cmd);
+            }
+            break;
+
+            default:
+                parsed = false;
+                break;
+            }
+        }
+        break;
+
+        default:
+            parsed = false;
+            break;
+        }
+        return parsed;
+    }
+
     /* class MrsUavFcuApi //{ */
 
     class MrsUavFcuApi : public mrs_uav_hw_api::MrsUavHwApi
@@ -410,6 +452,7 @@ namespace mrs_uav_fcu_api
         bool _simulation_;
 
         std::shared_ptr<SerialApi> ser_;
+        hitl_binder hitl_binder_;
         // output methods for rtk
         void publishGroundTruth(const nav_msgs::Odometry::ConstPtr msg);
 
@@ -432,9 +475,10 @@ namespace mrs_uav_fcu_api
         void publishGpsStatusRaw(const umsg_sensors_gps_t &msg);
         void publishBattery(const sensor_msgs::BatteryState::ConstPtr msg); // not yet implemented
 
+        std::thread parser_thread_;
         void messageParser();
 
-        void ParseMessage(umsg_MessageToTransfer &msg);
+        bool ParseMessage(umsg_MessageToTransfer &msg);
         // | ------------------------ variables ----------------------- |
 
         std::string uav_name;
@@ -533,7 +577,13 @@ namespace mrs_uav_fcu_api
 
         ser_->startReceiver();
         ser_->startSyncTimer(nh_);
+        if (_simulation_)
+        {
+            hitl_binder_.Init(parent_nh, ser_);
+        }
         ROS_INFO("[MrsUavFcuApi]: initialized");
+        parser_thread_ = std::thread([this]
+                                     { this->messageParser(); });
         is_initialized_ = true;
     }
 
@@ -932,7 +982,7 @@ namespace mrs_uav_fcu_api
 
     /* callbackImu() //{ */
 
-    void MrsUavFcuApi::publishImu(const sensor_msgs::Imu::ConstPtr msg)
+    void MrsUavFcuApi::publishImu(const umsg_sensors_imu_t &msg)
     {
 
         if (!is_initialized_)
@@ -945,10 +995,12 @@ namespace mrs_uav_fcu_api
         if (_capabilities_.produces_imu)
         {
 
+            /*
             sensor_msgs::Imu new_imu_msg = *msg;
             new_imu_msg.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
 
             common_handlers_->publishers.publishIMU(new_imu_msg);
+            */
         }
     }
 
@@ -956,7 +1008,7 @@ namespace mrs_uav_fcu_api
 
     /* callbackCompass() //{ */
 
-    void MrsUavFcuApi::publishMagnetometer(const std_msgs::Float64::ConstPtr msg)
+    void MrsUavFcuApi::publishMagnetometer(const umsg_sensors_mag_t &msg)
     {
 
         if (!is_initialized_)
@@ -968,13 +1020,14 @@ namespace mrs_uav_fcu_api
 
         if (_capabilities_.produces_magnetometer_heading)
         {
+            /*
+                        mrs_msgs::Float64Stamped mag_out;
+                        mag_out.header.stamp = ros::Time::now();
+                        mag_out.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
+                        mag_out.value = msg->data;
 
-            mrs_msgs::Float64Stamped mag_out;
-            mag_out.header.stamp = ros::Time::now();
-            mag_out.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
-            mag_out.value = msg->data;
-
-            common_handlers_->publishers.publishMagnetometerHeading(mag_out);
+                        common_handlers_->publishers.publishMagnetometerHeading(mag_out);
+                    */
         }
     }
 
@@ -982,7 +1035,7 @@ namespace mrs_uav_fcu_api
 
     /* callbackMagneticField() //{ */
 
-    void MrsUavFcuApi::publishMagneticField(const sensor_msgs::MagneticField::ConstPtr msg)
+    void MrsUavFcuApi::publishMagneticField(const umsg_sensors_mag_t &msg)
     {
 
         if (!is_initialized_)
@@ -995,7 +1048,7 @@ namespace mrs_uav_fcu_api
         if (_capabilities_.produces_magnetic_field)
         {
 
-            common_handlers_->publishers.publishMagneticField(*msg);
+            //            common_handlers_->publishers.publishMagneticField(*msg);
         }
     }
 
@@ -1003,7 +1056,7 @@ namespace mrs_uav_fcu_api
 
     /* callbackRC() //{ */
 
-    void MrsUavFcuApi::publishRC(const mavros_msgs::RCIn::ConstPtr msg)
+    void MrsUavFcuApi::publishRC(const umsg_control_sBusPacket_t &msg)
     {
 
         if (!is_initialized_)
@@ -1016,6 +1069,7 @@ namespace mrs_uav_fcu_api
         if (_capabilities_.produces_rc_channels)
         {
 
+            /*
             mrs_msgs::HwApiRcChannels rc_out;
 
             rc_out.stamp = msg->header.stamp;
@@ -1026,6 +1080,7 @@ namespace mrs_uav_fcu_api
             }
 
             common_handlers_->publishers.publishRcChannels(rc_out);
+            */
         }
     }
 
@@ -1260,7 +1315,7 @@ namespace mrs_uav_fcu_api
         common_handlers_->publishers.publishRTK(rtk_msg_out);
     }
 
-    void MrsUavFcuApi::ParseMessage(umsg_MessageToTransfer &msg)
+    bool MrsUavFcuApi::ParseMessage(umsg_MessageToTransfer &msg)
     {
         uint8_t msg_class = msg.s.msg_class;
         uint8_t msg_type = msg.s.msg_type;
@@ -1321,6 +1376,7 @@ namespace mrs_uav_fcu_api
         default:
             break;
         }
+        return parsed;
     }
 
     void MrsUavFcuApi::messageParser()
@@ -1329,7 +1385,20 @@ namespace mrs_uav_fcu_api
         while (true)
         {
             umsg_MessageToTransfer msg = ser_->waitForPacket();
-            ParseMessage(msg);
+            bool parsed = false;
+            if (_simulation_)
+            {
+                parsed = hitl_binder_.ParseMessage(msg) || ParseMessage(msg);
+            }
+            else
+            {
+                parsed = ParseMessage(msg);
+            }
+
+            if (!parsed)
+            {
+                ROS_ERROR("[HWApi] message class %d and type %d could not be parsed", msg.s.msg_class, msg.s.msg_type);
+            }
         }
     };
 
