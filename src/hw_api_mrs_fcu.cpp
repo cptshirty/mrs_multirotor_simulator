@@ -33,6 +33,8 @@
 
 #include "SerialApi.h"
 
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
 #include <umsg.h>
 #include <umsg_classes.h>
 
@@ -462,25 +464,32 @@ namespace mrs_uav_fcu_api
 
         // normal output methods
 
-        void publishState(const mavros_msgs::State::ConstPtr msg);
-
-        void publishOdometryLocal(const nav_msgs::Odometry::ConstPtr msg);
-        void publishNavsatFix(const sensor_msgs::NavSatFix::ConstPtr msg);
+        void publishState(const umsg_state_UAV_state_t &msg);
+        void publishAttitude(const umsg_estimation_attitude_t &msg);
+        void publishOdometryLocal(const umsg_estimation_position_t &msg);
+        void publishNavsatFix(umsg_sensors_gps_t &msg);
         void publishDistanceSensor(const sensor_msgs::Range::ConstPtr msg); // not yet implemented
         void publishImu(const umsg_sensors_imu_t &msg);
         void publishMagnetometer(const umsg_sensors_mag_t &msg);
         void publishMagneticField(const umsg_sensors_mag_t &msg);
         void publishRC(const umsg_control_sBusPacket_t &msg);
-        void publishAltitude(const mavros_msgs::Altitude::ConstPtr msg);
+        void publishAltitude(const umsg_sensors_altimeter_t &msg);
         void publishGpsStatusRaw(const umsg_sensors_gps_t &msg);
-        void publishBattery(const sensor_msgs::BatteryState::ConstPtr msg); // not yet implemented
+        void publishBattery(); // not yet implemented
 
         std::thread parser_thread_;
         void messageParser();
 
         bool ParseMessage(umsg_MessageToTransfer &msg);
         // | ------------------------ variables ----------------------- |
+        // | ------------------------ variables ----------------------- |
 
+        std::atomic<bool> offboard_ = false;
+        std::string mode_;
+        std::atomic<bool> armed_ = false;
+        std::atomic<bool> connected_ = false;
+        std::mutex mutex_status_;
+        Eigen::Matrix3d R_orientation;
         std::string uav_name;
     };
 
@@ -597,6 +606,10 @@ namespace mrs_uav_fcu_api
         mrs_msgs::HwApiStatus status;
 
         status.stamp = ros::Time::now();
+        status.armed = armed_;
+        status.offboard = offboard_;
+        status.connected = connected_;
+        status.mode = mode_;
 
         return status;
     }
@@ -673,8 +686,6 @@ namespace mrs_uav_fcu_api
 
         std::stringstream ss;
 
-        mavros_msgs::CommandLong srv_out;
-
         // when REALWORLD AND ARM:=TRUE
         if (!_simulation_ && request)
         {
@@ -685,21 +696,21 @@ namespace mrs_uav_fcu_api
             return {false, "ss.str()"};
         }
 
-        srv_out.request.broadcast = false;
-        srv_out.request.command = 400; // the code for arming
-        srv_out.request.confirmation = true;
+        umsg_MessageToTransfer msg;
+        msg.s.sync0 = 'M';
+        msg.s.sync1 = 'R';
+        msg.s.msg_class = UMSG_STATE;
+        msg.s.msg_type = STATE_STATECHANGEREQUEST;
+        msg.s.state.stateChangeRequest.requestedState = request ? UAV_FLYING : UAV_DISARMED;
+        msg.s.state.stateChangeRequest.timestamp = ser_->RosToFcu(ros::Time::now());
+        msg.s.len = UMSG_HEADER_SIZE + sizeof(umsg_state_stateChangeRequest_t) + 1;
+        msg.raw[msg.s.len - 1] = umsg_calcCRC(msg.raw, msg.s.len - 1);
+        ser_->sendPacket(msg);
 
-        srv_out.request.param1 = request ? 1 : 0;     // arm or disarm?
-        srv_out.request.param2 = request ? 0 : 21196; // 21196 allows to disarm even in mid-flight
-        srv_out.request.param3 = 0;
-        srv_out.request.param4 = 0;
-        srv_out.request.param5 = 0;
-        srv_out.request.param6 = 0;
-        srv_out.request.param7 = 0;
+        // TODO maybe there is a confirmation mechanism needed?
+        ROS_INFO("[FcuApi]: calling for %s", request ? "arming" : "disarming");
 
-        ROS_INFO("[Px4Api]: calling for %s", request ? "arming" : "disarming");
-
-        return {false, "ss.str()"};
+        return {true, "ss.str()"};
     }
 
     //}
@@ -708,42 +719,21 @@ namespace mrs_uav_fcu_api
 
     std::tuple<bool, std::string> MrsUavFcuApi::callbackOffboard(void)
     {
+        umsg_MessageToTransfer msg;
+        msg.s.sync0 = 'M';
+        msg.s.sync1 = 'R';
+        msg.s.msg_class = UMSG_STATE;
+        msg.s.msg_type = STATE_MODECHANGEREQUEST;
+        msg.s.state.modeChangeRequest.requestedMode = OFFBOARD;
+        msg.s.state.modeChangeRequest.timestamp = ser_->RosToFcu(ros::Time::now());
+        msg.s.len = UMSG_HEADER_SIZE + sizeof(umsg_state_modeChangeRequest_t) + 1;
+        msg.raw[msg.s.len - 1] = umsg_calcCRC(msg.raw, msg.s.len - 1);
+        ser_->sendPacket(msg);
 
-        mavros_msgs::SetMode srv;
+        // TODO maybe there is a confirmation mechanism needed?
+        ROS_INFO("[FcuApi]: calling for offboard mode");
 
-        srv.request.base_mode = 0;
-        srv.request.custom_mode = "OFFBOARD";
-
-        std::stringstream ss;
-
-        if (1)
-        {
-
-            ss << "Service call for offboard failed!";
-
-            ROS_ERROR_THROTTLE(1.0, "[Px4Api]: %s", ss.str().c_str());
-            return {false, ss.str()};
-        }
-        else
-        {
-
-            if (srv.response.mode_sent != 1)
-            {
-
-                ss << "service call for offboard failed, returned " << srv.response.mode_sent;
-
-                ROS_WARN_THROTTLE(1.0, "[Px4Api]: %s", ss.str().c_str());
-
-                return {false, ss.str()};
-            }
-            else
-            {
-
-                ss << "switched to offboard mode";
-
-                return {true, ss.str()};
-            }
-        }
+        return {true, "ss.str()"};
     }
 
     //}
@@ -818,8 +808,7 @@ namespace mrs_uav_fcu_api
 
     /* //{ callbackMavrosState() */
 
-    /*
-    void MrsUavFcuApi::publishMavrosState(const mavros_msgs::State::ConstPtr msg)
+    void MrsUavFcuApi::publishState(const umsg_state_UAV_state_t &msg)
     {
 
         if (!is_initialized_)
@@ -832,10 +821,10 @@ namespace mrs_uav_fcu_api
         {
             std::scoped_lock lock(mutex_status_);
 
-            offboard_ = msg->mode == "OFFBOARD";
-            armed_ = msg->armed;
+            offboard_ = msg.control_mode == OFFBOARD;
+            armed_ = msg.state == UAV_FLYING;
             connected_ = true;
-            mode_ = msg->mode;
+            mode_ = "TODO";
         }
 
         // | ----------------- publish the diagnostics ---------------- |
@@ -845,7 +834,7 @@ namespace mrs_uav_fcu_api
         {
             std::scoped_lock lock(mutex_status_);
 
-            status.stamp = ros::Time::now();
+            status.stamp = ser_->FcuToRos(msg.timestamp);
             status.armed = armed_;
             status.offboard = offboard_;
             status.connected = connected_;
@@ -855,12 +844,11 @@ namespace mrs_uav_fcu_api
         common_handlers_->publishers.publishStatus(status);
     }
 
-    */
     //}
 
     /* callbackOdometryLocal() //{ */
 
-    void MrsUavFcuApi::publishOdometryLocal(const nav_msgs::Odometry::ConstPtr msg)
+    void MrsUavFcuApi::publishOdometryLocal(const umsg_estimation_position_t &msg)
     {
 
         if (!is_initialized_)
@@ -879,26 +867,18 @@ namespace mrs_uav_fcu_api
 
             geometry_msgs::PointStamped position;
 
-            position.header.stamp = odom->header.stamp;
+            position.header.stamp = ser_->FcuToRos(msg.timestamp);
             position.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
-            position.point = odom->pose.pose.position;
+            geometry_msgs::Point p;
+            p.x = msg.position[0];
+            p.y = msg.position[1];
+            p.z = msg.position[2];
+            position.point = p;
 
             common_handlers_->publishers.publishPosition(position);
         }
 
         // | ------------------- publish orientation ------------------ |
-
-        if (_capabilities_.produces_orientation)
-        {
-
-            geometry_msgs::QuaternionStamped orientation;
-
-            orientation.header.stamp = odom->header.stamp;
-            orientation.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
-            orientation.quaternion = odom->pose.pose.orientation;
-
-            common_handlers_->publishers.publishOrientation(orientation);
-        }
 
         // | -------------------- publish velocity -------------------- |
 
@@ -907,40 +887,32 @@ namespace mrs_uav_fcu_api
 
             geometry_msgs::Vector3Stamped velocity;
 
-            velocity.header.stamp = odom->header.stamp;
+            velocity.header.stamp = ser_->FcuToRos(msg.timestamp);
+            //  TODO FIX : you have to
             velocity.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
-            velocity.vector = odom->twist.twist.linear;
+            Eigen::Vector3d vel_world(msg.velocity);
+            Eigen::Vector3d vel_body = R_orientation.inverse() * vel_world;
+            velocity.vector.x = vel_body.x();
+            velocity.vector.x = vel_body.y();
+            velocity.vector.x = vel_body.z();
 
             common_handlers_->publishers.publishVelocity(velocity);
         }
 
         // | ---------------- publish angular velocity ---------------- |
-
-        if (_capabilities_.produces_angular_velocity)
-        {
-
-            geometry_msgs::Vector3Stamped angular_velocity;
-
-            angular_velocity.header.stamp = odom->header.stamp;
-            angular_velocity.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
-            angular_velocity.vector = odom->twist.twist.angular;
-
-            common_handlers_->publishers.publishAngularVelocity(angular_velocity);
-        }
-
         // | -------------------- publish odometry -------------------- |
 
         if (_capabilities_.produces_odometry)
         {
-            common_handlers_->publishers.publishOdometry(*odom);
+            ROS_ERROR_ONCE("[ODOMETRY] not yet implemented");
+            // common_handlers_->publishers.publishOdometry(odom);
         }
     }
 
     //}
 
     /* callbackNavsatFix() //{ */
-
-    void MrsUavFcuApi::publishNavsatFix(const sensor_msgs::NavSatFix::ConstPtr msg)
+    void MrsUavFcuApi::publishNavsatFix(umsg_sensors_gps_t &msg)
     {
 
         if (!is_initialized_)
@@ -952,8 +924,15 @@ namespace mrs_uav_fcu_api
 
         if (_capabilities_.produces_gnss)
         {
-
-            common_handlers_->publishers.publishGNSS(*msg);
+            sensor_msgs::NavSatFix fixmsg;
+            fixmsg.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
+            fixmsg.header.stamp = ser_->FcuToRos(msg.timestamp);
+            fixmsg.altitude = msg.hMSL;
+            fixmsg.latitude = msg.lat;
+            fixmsg.longitude = msg.lon;
+            fixmsg.position_covariance_type = sensor_msgs::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
+            fixmsg.status.status = (msg.fixType == FIX_3D) ? sensor_msgs::NavSatStatus::STATUS_FIX : sensor_msgs::NavSatStatus::STATUS_NO_FIX;
+            common_handlers_->publishers.publishGNSS(fixmsg);
         }
     }
 
@@ -995,12 +974,17 @@ namespace mrs_uav_fcu_api
         if (_capabilities_.produces_imu)
         {
 
-            /*
-            sensor_msgs::Imu new_imu_msg = *msg;
-            new_imu_msg.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
+            sensor_msgs::Imu imu;
+            imu.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
 
-            common_handlers_->publishers.publishIMU(new_imu_msg);
-            */
+            imu.header.stamp = ser_->FcuToRos(msg.timestamp);
+            imu.angular_velocity.x = msg.gyro[0];
+            imu.angular_velocity.y = msg.gyro[1];
+            imu.angular_velocity.z = msg.gyro[2];
+            imu.linear_acceleration.x = msg.accel[0];
+            imu.linear_acceleration.y = msg.accel[1];
+            imu.linear_acceleration.z = msg.accel[2];
+            common_handlers_->publishers.publishIMU(imu);
         }
     }
 
@@ -1020,14 +1004,12 @@ namespace mrs_uav_fcu_api
 
         if (_capabilities_.produces_magnetometer_heading)
         {
-            /*
-                        mrs_msgs::Float64Stamped mag_out;
-                        mag_out.header.stamp = ros::Time::now();
-                        mag_out.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
-                        mag_out.value = msg->data;
+            mrs_msgs::Float64Stamped mag_out;
+            mag_out.header.stamp = ser_->FcuToRos(msg.timestamp);
+            mag_out.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
+            mag_out.value = 180 / M_PI * std::atan2(-msg.mag[0], msg.mag[1]);
 
-                        common_handlers_->publishers.publishMagnetometerHeading(mag_out);
-                    */
+            common_handlers_->publishers.publishMagnetometerHeading(mag_out);
         }
     }
 
@@ -1047,8 +1029,13 @@ namespace mrs_uav_fcu_api
 
         if (_capabilities_.produces_magnetic_field)
         {
-
-            //            common_handlers_->publishers.publishMagneticField(*msg);
+            sensor_msgs::MagneticField mag;
+            mag.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
+            mag.header.stamp = ser_->FcuToRos(msg.timestamp);
+            mag.magnetic_field.x = static_cast<double>(msg.mag[0]);
+            mag.magnetic_field.y = static_cast<double>(msg.mag[1]);
+            mag.magnetic_field.z = static_cast<double>(msg.mag[2]);
+            common_handlers_->publishers.publishMagneticField(mag);
         }
     }
 
@@ -1069,18 +1056,16 @@ namespace mrs_uav_fcu_api
         if (_capabilities_.produces_rc_channels)
         {
 
-            /*
             mrs_msgs::HwApiRcChannels rc_out;
 
-            rc_out.stamp = msg->header.stamp;
+            rc_out.stamp = ser_->FcuToRos(msg.timestamp);
 
-            for (size_t i = 0; i < msg->channels.size(); i++)
+            for (size_t i = 1; i < 16; i++)
             {
-                rc_out.channels.push_back(RCChannelToRange(msg->channels[i]));
+                rc_out.channels.push_back(RCChannelToRange(msg.channels[i]));
             }
 
             common_handlers_->publishers.publishRcChannels(rc_out);
-            */
         }
     }
 
@@ -1088,7 +1073,7 @@ namespace mrs_uav_fcu_api
 
     /* callbackAltitude() //{ */
 
-    void MrsUavFcuApi::publishAltitude(const mavros_msgs::Altitude::ConstPtr msg)
+    void MrsUavFcuApi::publishAltitude(const umsg_sensors_altimeter_t &msg)
     {
 
         if (!is_initialized_)
@@ -1103,8 +1088,8 @@ namespace mrs_uav_fcu_api
 
             mrs_msgs::HwApiAltitude altitude_out;
 
-            altitude_out.stamp = msg->header.stamp;
-            altitude_out.amsl = msg->amsl;
+            altitude_out.stamp = ser_->FcuToRos(msg.timestamp);
+            altitude_out.amsl = static_cast<double>(msg.altitude);
 
             common_handlers_->publishers.publishAltitude(altitude_out);
         }
@@ -1160,9 +1145,47 @@ namespace mrs_uav_fcu_api
 
     //}
 
+    void MrsUavFcuApi::publishAttitude(const umsg_estimation_attitude_t &msg)
+    {
+        if (_capabilities_.produces_orientation)
+        {
+
+            geometry_msgs::QuaternionStamped orientation;
+
+            orientation.header.stamp = ser_->FcuToRos(msg.timestamp);
+            orientation.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
+
+            Eigen::Quaternion<float> q_eig = Eigen::Quaternion<float>(msg.w, msg.x, msg.y, msg.z).inverse();
+            geometry_msgs::Quaternion q;
+            q.x = static_cast<double>(q_eig.x());
+            q.y = static_cast<double>(q_eig.y());
+            q.z = static_cast<double>(q_eig.z());
+            q.w = static_cast<double>(q_eig.w());
+            orientation.quaternion = q;
+
+            common_handlers_->publishers.publishOrientation(orientation);
+        }
+
+        if (_capabilities_.produces_angular_velocity)
+        {
+
+            geometry_msgs::Vector3Stamped angular_velocity;
+
+            angular_velocity.header.stamp = ser_->FcuToRos(msg.timestamp);
+            angular_velocity.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
+            geometry_msgs::Vector3 v;
+            v.x = static_cast<double>(msg.att_rate[0]);
+            v.y = static_cast<double>(msg.att_rate[1]);
+            v.z = static_cast<double>(msg.att_rate[2]);
+            angular_velocity.vector = v;
+
+            common_handlers_->publishers.publishAngularVelocity(angular_velocity);
+        }
+    };
+
     /* callbackBattery() //{ */
 
-    void MrsUavFcuApi::publishBattery(const sensor_msgs::BatteryState::ConstPtr msg)
+    void MrsUavFcuApi::publishBattery()
     {
 
         if (!ser_->isSynced())
@@ -1175,7 +1198,8 @@ namespace mrs_uav_fcu_api
         if (_capabilities_.produces_battery_state)
         {
 
-            common_handlers_->publishers.publishBatteryState(*msg);
+            ROS_ERROR("[pub battery] NOT IMPLEMENTED");
+            // common_handlers_->publishers.publishBatteryState(*msg);
         }
     }
 
@@ -1329,14 +1353,23 @@ namespace mrs_uav_fcu_api
             switch (msg_type)
             {
             case SENSORS_IMU:
+                publishImu(msg.s.sensors.imu);
                 break;
             case SENSORS_GPS:
-                break;
+            {
+
+                umsg_sensors_gps_t gps = msg.s.sensors.gps;
+                publishNavsatFix(gps);
+                publishGpsStatusRaw(gps);
+            }
+            break;
             case SENSORS_ALTIMETER:
+                publishAltitude(msg.s.sensors.altimeter);
                 break;
             case SENSORS_MAG:
+                publishMagneticField(msg.s.sensors.mag);
+                publishMagnetometer(msg.s.sensors.mag);
                 break;
-
             default:
                 parsed = false;
                 break;
@@ -1348,6 +1381,21 @@ namespace mrs_uav_fcu_api
             switch (msg_type)
             {
             case STATE_UAV_STATE:
+                publishState(msg.s.state.UAV_state);
+                break;
+
+            default:
+                parsed = false;
+                break;
+            }
+        }
+        break;
+        case UMSG_CONTROL:
+        {
+            switch (msg_type)
+            {
+            case CONTROL_SBUSPACKET:
+                publishRC(msg.s.control.sBusPacket);
                 break;
 
             default:
@@ -1362,8 +1410,15 @@ namespace mrs_uav_fcu_api
             switch (msg_type)
             {
             case ESTIMATION_ATTITUDE:
-                break;
+            {
+                umsg_estimation_attitude_t att = msg.s.estimation.attitude;
+                Eigen::Quaternion<double> q = Eigen::Quaternion<float>(att.w, att.x, att.y, att.z).cast<double>();
+                R_orientation = q.toRotationMatrix();
+                publishAttitude(att);
+            }
+            break;
             case ESTIMATION_POSITION:
+                publishOdometryLocal(msg.s.estimation.position);
                 break;
 
             default:

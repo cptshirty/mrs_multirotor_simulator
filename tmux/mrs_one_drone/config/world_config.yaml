@@ -1,9 +1,9 @@
 world_origin:
 
-  units: "UTM" # {"UTM, "LATLON"}
+  units: "LATLON" # {"UTM, "LATLON"}
 
-  origin_x: 0
-  origin_y: 0
+  origin_x: 15.2
+  origin_y: 14.3
 
 safety_area:
 

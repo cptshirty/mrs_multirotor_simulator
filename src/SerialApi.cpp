@@ -86,7 +86,7 @@ uint32_t SerialApi::RosToFcu(const ros::Time &rosTime)
 ros::Time SerialApi::FcuToRos(const uint32_t &FcuTime)
 {
     auto [syncTime_R, syncTime_F] = mrs_lib::get_mutexed(mutex_sync_result, sync_result);
-    int64_t diff = static_cast<int64_t>(FcuTime) - static_cast<int64_t>(syncTime_F) * 1e6;
+    int64_t diff = (static_cast<int64_t>(FcuTime) - static_cast<int64_t>(syncTime_F)) * 1e6;
 
     ros::Duration diff_R;
     diff_R.fromNSec(diff);

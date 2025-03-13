@@ -12,9 +12,9 @@ input_mode:
   feedforward: true
 
 outputs:
-  distance_sensor:      true
+  distance_sensor:      false
   gnss:                 true
-  rtk:                  true
+  rtk:                  false
   imu:                  true
   altitude:             true
   magnetometer_heading: true
@@ -24,8 +24,8 @@ outputs:
   orientation:          true
   velocity:             true
   angular_velocity:     true
-  odometry:             true
-  ground_truth:         true
+  odometry:             false
+  ground_truth:         false
 
 
 
