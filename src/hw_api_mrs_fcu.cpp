@@ -192,8 +192,9 @@ namespace mrs_uav_fcu_api
 
         out.s.sensors.gps.timestamp = ser_->RosToFcu(sim_time);
         out.s.sensors.gps.fixType = FIX_3D;
-        out.s.sensors.gps.hELPS = 0;
-        out.s.sensors.gps.hMSL = 0;
+        out.s.sensors.gps.hELPS = msg->pose.pose.position.z;
+        out.s.sensors.gps.hMSL = msg->pose.pose.position.z;
+        ;
         out.s.sensors.gps.reserved = 0;
         out.s.sensors.gps.numSV = 20;
 
@@ -824,9 +825,19 @@ namespace mrs_uav_fcu_api
             offboard_ = msg.control_mode == OFFBOARD;
             armed_ = msg.state == UAV_FLYING;
             connected_ = true;
-            mode_ = "TODO";
+            switch (msg.control_mode)
+            {
+            case MANUAL:
+                mode_ = "MANUAL";
+                break;
+            case AUTONOMOUS:
+                mode_ = "AUTONOMOUS";
+                break;
+            case OFFBOARD:
+                mode_ = "AUTONOMOUS";
+                break;
+            }
         }
-
         // | ----------------- publish the diagnostics ---------------- |
 
         mrs_msgs::HwApiStatus status;
@@ -857,8 +868,6 @@ namespace mrs_uav_fcu_api
         }
 
         ROS_INFO_ONCE("[MrsUavFcuApi]: getting Mavros's local odometry");
-
-        auto odom = msg;
 
         // | -------------------- publish position -------------------- |
 
@@ -891,10 +900,10 @@ namespace mrs_uav_fcu_api
             //  TODO FIX : you have to
             velocity.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
             Eigen::Vector3d vel_world(msg.velocity);
-            Eigen::Vector3d vel_body = R_orientation.inverse() * vel_world;
+            Eigen::Vector3d vel_body = R_orientation * vel_world;
             velocity.vector.x = vel_body.x();
-            velocity.vector.x = vel_body.y();
-            velocity.vector.x = vel_body.z();
+            velocity.vector.y = vel_body.y();
+            velocity.vector.z = vel_body.z();
 
             common_handlers_->publishers.publishVelocity(velocity);
         }
@@ -925,7 +934,7 @@ namespace mrs_uav_fcu_api
         if (_capabilities_.produces_gnss)
         {
             sensor_msgs::NavSatFix fixmsg;
-            fixmsg.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
+            fixmsg.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
             fixmsg.header.stamp = ser_->FcuToRos(msg.timestamp);
             fixmsg.altitude = msg.hMSL;
             fixmsg.latitude = msg.lat;
@@ -1007,7 +1016,7 @@ namespace mrs_uav_fcu_api
             mrs_msgs::Float64Stamped mag_out;
             mag_out.header.stamp = ser_->FcuToRos(msg.timestamp);
             mag_out.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
-            mag_out.value = 180 / M_PI * std::atan2(-msg.mag[0], msg.mag[1]);
+            mag_out.value = 180 / M_PI * std::atan2(msg.mag[1], msg.mag[0]);
 
             common_handlers_->publishers.publishMagnetometerHeading(mag_out);
         }
@@ -1030,7 +1039,7 @@ namespace mrs_uav_fcu_api
         if (_capabilities_.produces_magnetic_field)
         {
             sensor_msgs::MagneticField mag;
-            mag.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
+            mag.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
             mag.header.stamp = ser_->FcuToRos(msg.timestamp);
             mag.magnetic_field.x = static_cast<double>(msg.mag[0]);
             mag.magnetic_field.y = static_cast<double>(msg.mag[1]);
@@ -1087,7 +1096,6 @@ namespace mrs_uav_fcu_api
         {
 
             mrs_msgs::HwApiAltitude altitude_out;
-
             altitude_out.stamp = ser_->FcuToRos(msg.timestamp);
             altitude_out.amsl = static_cast<double>(msg.altitude);
 
@@ -1153,7 +1161,7 @@ namespace mrs_uav_fcu_api
             geometry_msgs::QuaternionStamped orientation;
 
             orientation.header.stamp = ser_->FcuToRos(msg.timestamp);
-            orientation.header.frame_id = _uav_name_ + "/" + _body_frame_name_;
+            orientation.header.frame_id = _uav_name_ + "/" + _world_frame_name_;
 
             Eigen::Quaternion<float> q_eig = Eigen::Quaternion<float>(msg.w, msg.x, msg.y, msg.z).inverse();
             geometry_msgs::Quaternion q;
