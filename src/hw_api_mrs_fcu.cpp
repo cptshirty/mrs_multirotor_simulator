@@ -43,9 +43,9 @@
 /* defines //{ */
 
 #define GRAV_CONST 9.81
-#define PWM_MIDDLE 1500
-#define PWM_MIN 1000
-#define PWM_MAX 2000
+#define PWM_MIDDLE 0
+#define PWM_MIN -10000
+#define PWM_MAX 10000
 #define PWM_DEADBAND 200
 #define PWM_RANGE PWM_MAX - PWM_MIN
 
@@ -834,7 +834,7 @@ namespace mrs_uav_fcu_api
                 mode_ = "AUTONOMOUS";
                 break;
             case OFFBOARD:
-                mode_ = "AUTONOMOUS";
+                mode_ = "OFFBOARD";
                 break;
             }
         }
@@ -1069,9 +1069,9 @@ namespace mrs_uav_fcu_api
 
             rc_out.stamp = ser_->FcuToRos(msg.timestamp);
 
-            for (size_t i = 1; i < 16; i++)
+            for (size_t i = 1; i < 17; i++)
             {
-                rc_out.channels.push_back(RCChannelToRange(msg.channels[i]));
+                rc_out.channels.push_back(RCChannelToRange(static_cast<double>(msg.channels[i])));
             }
 
             common_handlers_->publishers.publishRcChannels(rc_out);
