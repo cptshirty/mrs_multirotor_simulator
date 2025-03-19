@@ -5,6 +5,33 @@
 
 mrs_uav_managers:
 
+  control_manager:
+
+    trackers: [
+      "FlipTracker"
+    ]
+
+    safety:
+
+      tilt_limit:
+      
+        eland:
+          enabled: false
+          limit: 75.0 # [deg]
+
+        disarm:
+          enabled: false
+          limit: 75.0 # [deg]
+
+      tilt_error_disarm:
+        enabled: false
+        timeout: 0.5 # [s] # for how long the error has to be present to disarm
+        error_threshold: 20.0 # [deg]
+
+      yaw_error_eland:
+        enabled: false
+        limit: 90.0 # [deg]
+
   estimation_manager:
 
     # loaded state estimator plugins
@@ -32,3 +59,14 @@ mrs_uav_managers:
       after_activation:
         controller: "Se3Controller"
         tracker: "MpcTracker"
+
+  constraint_manager:
+
+    # list of allowed constraints per odometry mode
+    allowed_constraints:
+      gps_baro: ["slow", "medium", "fast"]
+
+    # those constraints will be used automatically when a localization mode switches
+    # and the current constraints are not in the allowed list (next paragraphs)
+    default_constraints:
+      gps_baro: "fast"

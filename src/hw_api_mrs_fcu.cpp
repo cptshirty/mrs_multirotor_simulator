@@ -385,7 +385,7 @@ namespace mrs_uav_fcu_api
 
                 for (size_t i = 0; i < 4; i++)
                 {
-                    cmd.motors.push_back(static_cast<float>(DshotMessage.channels[i]) / 2048.);
+                    cmd.motors.push_back(static_cast<float>(DshotMessage.channels[i] - 48) / 2048.);
                 }
                 ph_actuator_cmd_.publish(cmd);
             }
@@ -674,6 +674,21 @@ namespace mrs_uav_fcu_api
             ROS_ERROR_THROTTLE(1.0, "[MrsUavFcuApi]: attitude input is not enabled in the config file");
             return false;
         }
+        umsg_MessageToTransfer out;
+
+        out.s.sync0 = 'M';
+        out.s.sync1 = 'R';
+        out.s.msg_class = UMSG_OFFBOARD;
+        out.s.msg_type = OFFBOARD_ATTITUDECMD;
+        out.s.offboard.AttitudeCmd.w = msg->orientation.w;
+        out.s.offboard.AttitudeCmd.x = msg->orientation.x;
+        out.s.offboard.AttitudeCmd.y = msg->orientation.y;
+        out.s.offboard.AttitudeCmd.z = msg->orientation.z;
+        out.s.offboard.AttitudeCmd.throttle = msg->throttle;
+        out.s.offboard.AttitudeCmd.timestamp = ser_->RosToFcu(msg->stamp);
+        out.s.len = UMSG_HEADER_SIZE + sizeof(umsg_offboard_AttitudeCmd_t) + 1;
+        out.raw[out.s.len - 1] = umsg_calcCRC(out.raw, out.s.len - 1);
+        ser_->sendPacket(out);
 
         return true;
     }
