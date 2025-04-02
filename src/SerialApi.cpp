@@ -172,7 +172,7 @@ void SerialApi::Receiver()
                 if (recvdMsg.s.sync0 != 'M')
                 {
                     ROS_ERROR("first is the culprit");
-                    goto msg_flush;
+                    goto msg_reset;
                 }
                 state = WAITING_FOR_SYNC1;
                 msg_len = 1;
@@ -190,7 +190,7 @@ void SerialApi::Receiver()
                 if (recvdMsg.s.sync1 != 'R')
                 {
                     ROS_ERROR("second is the culprit");
-                    goto msg_flush;
+                    goto msg_reset;
                 }
                 state = WAITING_FOR_HEADER;
                 msg_len = 2;
