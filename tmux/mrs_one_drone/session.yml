@@ -57,3 +57,4 @@ windows:
       layout: tiled
       panes:
        - waitForRos; sleep 2; rosrun plotjuggler plotjuggler
+       - waitForRos; sleep 2; rosbag record -a 

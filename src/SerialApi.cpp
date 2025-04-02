@@ -159,7 +159,7 @@ void SerialApi::Receiver()
     bool receptionComplete = false;
     ROS_INFO_ONCE("[SerialApi]: ReceiverActive spinning");
     int readBytes = 0; // amount of read bytes
-    int toRead = 0;    // amount of read bytes
+    int toRead = 0;    // amount of bytes needed to read
     while (true)
     {
         switch (state)
@@ -172,11 +172,10 @@ void SerialApi::Receiver()
                 if (recvdMsg.s.sync0 != 'M')
                 {
                     ROS_ERROR("first is the culprit");
-                    goto msg_err;
+                    goto msg_flush;
                 }
                 state = WAITING_FOR_SYNC1;
                 msg_len = 1;
-                readBytes = 0;
             }
             else
             {
@@ -186,16 +185,15 @@ void SerialApi::Receiver()
         }
         case WAITING_FOR_SYNC1:
         {
-            if (readBytes >= 1)
+            if (readBytes >= 2)
             {
                 if (recvdMsg.s.sync1 != 'R')
                 {
                     ROS_ERROR("second is the culprit");
-                    goto msg_err;
+                    goto msg_flush;
                 }
                 state = WAITING_FOR_HEADER;
                 msg_len = 2;
-                readBytes = 0;
             }
             else
             {
@@ -205,32 +203,32 @@ void SerialApi::Receiver()
         }
         case WAITING_FOR_HEADER:
         {
-            if (readBytes >= UMSG_HEADER_SIZE - msg_len)
+            if (readBytes >= UMSG_HEADER_SIZE)
             {
                 if (recvdMsg.s.len > sizeof(umsg_MessageToTransfer) || msg_len > recvdMsg.s.len)
                 {
                     ROS_ERROR("third is the culprit");
-                    goto msg_err;
+
+                    goto msg_flush;
                 }
-                msg_len += UMSG_HEADER_SIZE - msg_len;
+                msg_len = UMSG_HEADER_SIZE;
                 state = WAITING_FOR_PAYLOAD;
-                readBytes = 0;
             }
             else
             {
-                toRead = UMSG_HEADER_SIZE - msg_len;
+                toRead = UMSG_HEADER_SIZE - readBytes;
             }
             break;
         }
         // fall through
         case WAITING_FOR_PAYLOAD:
         {
-            if (readBytes >= recvdMsg.s.len - msg_len)
+            if (readBytes >= recvdMsg.s.len)
             {
                 if (umsg_calcCRC(recvdMsg.raw, recvdMsg.s.len - 1) != recvdMsg.raw[recvdMsg.s.len - 1])
                 {
                     ROS_ERROR("forth is the culprit");
-                    goto msg_err;
+                    goto msg_flush;
                 }
                 msg_len += recvdMsg.s.len - msg_len;
                 receptionComplete = true;
@@ -238,13 +236,13 @@ void SerialApi::Receiver()
             }
             else
             {
-                toRead = recvdMsg.s.len - msg_len;
+                toRead = recvdMsg.s.len - readBytes;
             }
         }
         break;
 
         default:
-            goto msg_err;
+            goto msg_flush;
             break;
         }
 
@@ -279,29 +277,35 @@ void SerialApi::Receiver()
                 }
             }
             // flush
-            goto msg_flush;
+            goto msg_reset;
         }
 
-        toRead += -readBytes;
         if (toRead > 0)
         {
             // ROS_INFO("[SerialApi] there are %d bytes to read", toRead);
 
-            int received = ser.readSerial(recvdMsg.raw + msg_len + readBytes, toRead);
+            int received = ser.readSerial(recvdMsg.raw + readBytes, toRead);
             // ROS_INFO("[SerialApi] there was %d bytes received", received);
             readBytes += received;
+            toRead += -received;
         }
 
         continue;
-    msg_err:
 
-        // NOTE: another buffer overflow issue here
-        ROS_ERROR("message corrupted");
-        // flush
+    // throw out the header and try to catch the next one
+    msg_reset:
+        readBytes = 0;
     msg_flush:
+        if (readBytes > 2)
+        {
+            readBytes += -2; // flush the header
+            for (size_t i = 0; i < readBytes; i++)
+            {
+                recvdMsg.raw[i] = recvdMsg.raw[i + 2];
+            }
+        }
         msg_len = 0;
         state = WAITING_FOR_SYNC0;
-        readBytes = 0;
         toRead = 0;
         receptionComplete = false;
     }
