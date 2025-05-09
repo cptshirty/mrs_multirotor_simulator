@@ -5,7 +5,7 @@ socket_name: mrs
 attach: false
 tmux_options: -f /etc/ctu-mrs/tmux.conf
 # you can modify these
-pre_window: export UAV_NAME=uav1; export RUN_TYPE=simulation; export UAV_TYPE=robofly
+pre_window: export UAV_NAME=uav1; export RUN_TYPE=simulation; export UAV_TYPE=f450
 startup_window: hitl
 windows:
   - roscore:
@@ -19,12 +19,12 @@ windows:
   - hitl:
       layout: tiled
       panes:
-        - waitForRos; roslaunch mrs_multirotor_simulator hw_api.launch custom_config:=./custom_configs/hw_api.yaml
-        - waitForRos;sleep 1 ;rostopic echo /multirotor_simulator/uav1/odom
+        - waitForRos;sleep 2; roslaunch mrs_multirotor_simulator hw_api.launch custom_config:=./custom_configs/hw_api.yaml
+        - waitForRos;sleep 2; rostopic echo /uav1/hw_api/rc_channels
   - goto:
       layout: tiled
       panes:
-          #- waitForRos; rosrun plotjuggler plotjuggler -l custom_configs/juggler-layout.xml
+          - waitForRos; rosrun plotjuggler plotjuggler -l custom_configs/juggler-layout.xml
   
   - rviz:
       layout: tiled

@@ -160,6 +160,7 @@ void SerialApi::Receiver()
     ROS_INFO_ONCE("[SerialApi]: ReceiverActive spinning");
     int readBytes = 0; // amount of read bytes
     int toRead = 0;    // amount of bytes needed to read
+    int toFlush = 0;
     while (true)
     {
         switch (state)
@@ -172,6 +173,7 @@ void SerialApi::Receiver()
                 if (recvdMsg.s.sync0 != 'M')
                 {
                     ROS_ERROR("first is the culprit");
+                    toFlush = 1;
                     goto msg_reset;
                 }
                 state = WAITING_FOR_SYNC1;
@@ -190,6 +192,7 @@ void SerialApi::Receiver()
                 if (recvdMsg.s.sync1 != 'R')
                 {
                     ROS_ERROR("second is the culprit");
+                    toFlush = 2;
                     goto msg_reset;
                 }
                 state = WAITING_FOR_HEADER;
@@ -209,6 +212,7 @@ void SerialApi::Receiver()
                 {
                     ROS_ERROR("third is the culprit");
 
+                    toFlush = 2;
                     goto msg_flush;
                 }
                 msg_len = UMSG_HEADER_SIZE;
@@ -228,9 +232,10 @@ void SerialApi::Receiver()
                 if (umsg_calcCRC(recvdMsg.raw, recvdMsg.s.len - 1) != recvdMsg.raw[recvdMsg.s.len - 1])
                 {
                     ROS_ERROR("forth is the culprit");
+                    toFlush = 2;
                     goto msg_flush;
                 }
-                msg_len += recvdMsg.s.len - msg_len;
+                msg_len += (recvdMsg.s.len - msg_len);
                 receptionComplete = true;
                 readBytes = 0;
             }
@@ -242,6 +247,7 @@ void SerialApi::Receiver()
         break;
 
         default:
+            toFlush = 2;
             goto msg_flush;
             break;
         }
@@ -267,7 +273,6 @@ void SerialApi::Receiver()
                 int num_msgs = q_lock->getVal();
                 if (num_msgs < max_packets_in_q)
                 {
-                    // ROS_INFO("pushing msg class %d and type %d", recvdMsg.s.msg_class, recvdMsg.s.msg_type);
                     outQ.push(recvdMsg);
                     q_lock->release();
                 }
@@ -277,6 +282,7 @@ void SerialApi::Receiver()
                 }
             }
             // flush
+            toFlush = msg_len;
             goto msg_reset;
         }
 
@@ -294,15 +300,18 @@ void SerialApi::Receiver()
 
     // throw out the header and try to catch the next one
     msg_reset:
-        readBytes = 0;
     msg_flush:
-        if (readBytes > 2)
+        readBytes += -toFlush; // flush the header
+        if (readBytes >= 0)
         {
-            readBytes += -2; // flush the header
             for (size_t i = 0; i < readBytes; i++)
             {
-                recvdMsg.raw[i] = recvdMsg.raw[i + 2];
+                recvdMsg.raw[i] = recvdMsg.raw[i + toFlush];
             }
+        }
+        else
+        {
+            readBytes = 0;
         }
         msg_len = 0;
         state = WAITING_FOR_SYNC0;

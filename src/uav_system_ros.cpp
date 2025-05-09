@@ -577,10 +577,6 @@ namespace mrs_multirotor_simulator
 
             ph_imu_noise_.publish(imu);
         }
-        else
-        {
-            ROS_WARN("sim is: %ld last stamp: %ld, difference: %ld but wanted was %ld", sim_time.toNSec(), imu_last_stamp_.toNSec(), (sim_time - imu_last_stamp_).toNSec(), imu_delay_.toNSec());
-        }
     }
 
     //}
