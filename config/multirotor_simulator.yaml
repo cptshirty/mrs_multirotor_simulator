@@ -54,7 +54,7 @@ start_latitude: 15.2
 start_longditude: 14.3
 
 
-imu_rate: 1000.0 #[Hz]
+imu_rate: 200.0 #[Hz]
 
 mag_rate: 50.0 #[Hz]
 
